@@ -140,6 +140,12 @@ public partial class SevenZipWriter : AbstractWriter
         EnsurePlaceholderWritten();
 
         filename = NormalizeFilename(filename);
+        if (sevenZipOptions.EnableParallelism)
+        {
+            WriteParallelAsync(filename, source, options, false, CancellationToken.None)
+                .WaitForCompletion();
+            return;
+        }
         var progressStream = WrapWithProgress(source, filename);
 
         var isEmpty = source.CanSeek && source.Length == 0;
@@ -246,6 +252,7 @@ public partial class SevenZipWriter : AbstractWriter
             );
         }
 
+        CheckParallel();
         directoryName = NormalizeFilename(directoryName);
         directoryName = directoryName.TrimEnd('/');
 
@@ -269,17 +276,29 @@ public partial class SevenZipWriter : AbstractWriter
     /// </summary>
     protected override void Dispose(bool isDisposing)
     {
-        if (isDisposing && !finalized && !_isDisposed)
+        try
         {
-            finalized = true;
-            FinalizeArchive();
+            if (isDisposing && !finalized && !_isDisposed)
+            {
+                finalized = true;
+                FinalizeArchive();
+            }
         }
-        base.Dispose(isDisposing);
+        finally
+        {
+            if (isDisposing && encodePipeline is not null)
+            {
+                encodePipeline.StopAsync(false).WaitForCompletion();
+                parallelFolder?.Dispose();
+            }
+            base.Dispose(isDisposing);
+        }
     }
 
     private void FinalizeArchive()
     {
         EndSolidBlock();
+        DrainParallelAsync(false).WaitForCompletion();
         // Directory-only and empty archives never pass through Write().
         EnsurePlaceholderWritten();
         var output = OutputStream.NotNull();

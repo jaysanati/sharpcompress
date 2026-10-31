@@ -69,6 +69,11 @@ public partial class SevenZipWriter
     /// <summary>Finish the open solid block. Calling this without an open block has no effect.</summary>
     public void EndSolidBlock()
     {
+        if (sevenZipOptions.EnableParallelism)
+        {
+            EndParallelFolderAsync(false, CancellationToken.None).WaitForCompletion();
+            return;
+        }
         var encoder = blockEncoder;
         blockEncoder = null;
         blockOptions = null;
@@ -94,6 +99,11 @@ public partial class SevenZipWriter
     /// <summary>Finish the open solid block using asynchronous output I/O.</summary>
     public async ValueTask EndSolidBlockAsync(CancellationToken cancellationToken = default)
     {
+        if (sevenZipOptions.EnableParallelism)
+        {
+            await EndParallelFolderAsync(true, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         cancellationToken.ThrowIfCancellationRequested();
         var encoder = blockEncoder;
         blockEncoder = null;

@@ -636,3 +636,25 @@ writer. Updates are single-use. Set the source password in `ReaderOptions` and
 the destination password/header encryption in `SevenZipWriterOptions`; changing
 the data password recompresses the affected folders. Progress counts copied
 packed bytes and recompressed/added uncompressed bytes.
+
+### Parallel 7z writing
+
+Opt in when compression throughput matters, and set a memory budget appropriate for the host:
+
+```csharp
+await using var writer = new SevenZipWriter(destination, new SevenZipWriterOptions
+{
+    EnableParallelism = true,
+    MaxThreads = 4,
+    MemoryBudget = 256L << 20,
+    LeaveStreamOpen = true,
+});
+await writer.WriteAsync("data.bin", source, modificationTime: null, cancellationToken);
+```
+
+The same options work with `SevenZipUpdate.WriteTo` and `WriteToAsync`. Existing solid-block
+and encryption APIs are unchanged. LZMA2 can parallelize blocks of a large file; LZMA needs
+multiple folders for parallel work. A 32 MiB dictionary gives 128 MiB blocks, so a 96 MiB
+file occupies one job. A smaller budget can reduce concurrency; even a budget below one
+job's estimate allows that job to run alone. Parallel output may differ from serial output,
+but changing only `MaxThreads` does not change unencrypted archive bytes.

@@ -24,18 +24,29 @@ public partial class SevenZipWriter
         GC.SuppressFinalize(this);
         _isDisposed = true;
 
-        if (!finalized)
+        try
         {
-            finalized = true;
-            await FinalizeArchiveAsync().ConfigureAwait(false);
+            if (!finalized)
+            {
+                finalized = true;
+                await FinalizeArchiveAsync().ConfigureAwait(false);
+            }
         }
-        if (OutputStream is IAsyncDisposable asyncDisposable)
+        finally
         {
-            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-        }
-        else
-        {
-            OutputStream?.Dispose();
+            if (encodePipeline is not null)
+            {
+                await encodePipeline.StopAsync(true).ConfigureAwait(false);
+                parallelFolder?.Dispose();
+            }
+            if (OutputStream is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                OutputStream?.Dispose();
+            }
         }
         // base.DisposeAsync() is a no-op since _isDisposed is already set
         await base.DisposeAsync().ConfigureAwait(false);
@@ -44,6 +55,7 @@ public partial class SevenZipWriter
     private async ValueTask FinalizeArchiveAsync()
     {
         await EndSolidBlockAsync().ConfigureAwait(false);
+        await DrainParallelAsync(true).ConfigureAwait(false);
         // Reserve the signature even when no file data was written.
         await EnsurePlaceholderWrittenAsync(CancellationToken.None).ConfigureAwait(false);
         var output = OutputStream.NotNull();
@@ -199,10 +211,20 @@ public partial class SevenZipWriter
             );
         }
 
+        if (sevenZipOptions.EnableParallelism && cancellationToken.IsCancellationRequested)
+        {
+            await AbortParallelAsync(true).ConfigureAwait(false);
+        }
         cancellationToken.ThrowIfCancellationRequested();
         await EnsurePlaceholderWrittenAsync(cancellationToken).ConfigureAwait(false);
 
         filename = NormalizeFilename(filename);
+        if (sevenZipOptions.EnableParallelism)
+        {
+            await WriteParallelAsync(filename, source, options, true, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
         var progressStream = WrapWithProgress(source, filename);
 
         var isEmpty = source.CanSeek && source.Length == 0;
@@ -313,6 +335,10 @@ public partial class SevenZipWriter
         CancellationToken cancellationToken = default
     )
     {
+        if (sevenZipOptions.EnableParallelism)
+        {
+            return WriteDirectoryParallelAsync(directoryName, options, cancellationToken);
+        }
         cancellationToken.ThrowIfCancellationRequested();
         WriteDirectory(directoryName, options);
         return new ValueTask();

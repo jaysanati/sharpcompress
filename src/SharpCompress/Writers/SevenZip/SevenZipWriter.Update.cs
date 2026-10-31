@@ -19,7 +19,15 @@ public partial class SevenZipWriter
     {
         if (!entry.IsEmpty && entries[entries.Count - 1].IsEmpty)
         {
-            GetBlockEncoder().RecordEmptyStream();
+            if (sevenZipOptions.EnableParallelism)
+            {
+                parallelFolder ??= CreateParallelFolder(blockOptions ?? SnapshotBlockOptions(null));
+                parallelFolder.RecordEmptyStream();
+            }
+            else
+            {
+                GetBlockEncoder().RecordEmptyStream();
+            }
         }
         entries[entries.Count - 1] = entry;
     }
@@ -35,6 +43,7 @@ public partial class SevenZipWriter
     )
     {
         EnsurePlaceholderWritten();
+        DrainParallelAsync(false).WaitForCompletion();
         source.Position = offset;
         using var limited = new ReadOnlySubStream(source, packedLength);
         WrapWithProgress(limited, name).CopyTo(OutputStream.NotNull());
@@ -55,6 +64,7 @@ public partial class SevenZipWriter
     )
     {
         await EnsurePlaceholderWrittenAsync(cancellationToken).ConfigureAwait(false);
+        await DrainParallelAsync(true).ConfigureAwait(false);
         source.Position = offset;
         using var limited = new ReadOnlySubStream(source, packedLength);
         await WrapWithProgress(limited, name)

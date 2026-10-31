@@ -74,10 +74,32 @@ public sealed record SevenZipWriterOptions : IWriterOptions
         CompressionProviderRegistry.Default;
 
     /// <summary>
-    /// When true, opts in to a format's optional parallel encode. No writer currently implements
-    /// parallel encoding; reserved for future use. Default is false.
+    /// Enables ordered parallel folder and LZMA2 block compression. Default is false.
     /// </summary>
     public bool EnableParallelism { get; set; }
+
+    private int maxThreads = Environment.ProcessorCount;
+    private long? memoryBudget;
+
+    /// <summary>Maximum parallel compression jobs. Must be positive. Used only with EnableParallelism.</summary>
+    public int MaxThreads
+    {
+        get => maxThreads;
+        set =>
+            maxThreads = value >= 1 ? value : throw new ArgumentOutOfRangeException(nameof(value));
+    }
+
+    /// <summary>Estimated parallel job memory limit in bytes, or null for the default finished-output limit.
+    /// Must be positive. One job may run even when its estimate exceeds the limit.</summary>
+    public long? MemoryBudget
+    {
+        get => memoryBudget;
+        set =>
+            memoryBudget =
+                value is null || value >= 1
+                    ? value
+                    : throw new ArgumentOutOfRangeException(nameof(value));
+    }
 
     /// <summary>
     /// Whether to compress the archive header itself using LZMA.

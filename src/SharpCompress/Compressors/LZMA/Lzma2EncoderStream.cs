@@ -213,6 +213,35 @@ internal sealed class Lzma2EncoderStream : Stream
 #endif
     }
 
+    // Independent parallel blocks omit the stream end marker. Cancellation also covers
+    // the final partial chunk, and failures never flush more data during disposal.
+    internal async ValueTask FinishBlockAsync(CancellationToken cancellationToken)
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+        _isDisposed = true;
+        try
+        {
+            await FlushChunkAsync(final: true, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ReleaseBuffers();
+        }
+    }
+
+    internal void Abort()
+    {
+        if (!_isDisposed)
+        {
+            _isDisposed = true;
+            ReleaseBuffers();
+        }
+    }
+
     private void ReleaseBuffers()
     {
         try

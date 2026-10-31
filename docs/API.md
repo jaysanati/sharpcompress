@@ -518,7 +518,7 @@ var options = new WriterOptions(CompressionType.Deflate)
 archive.SaveTo("output.zip", options);
 ```
 
-`WriterOptions.EnableParallelism` (also available on `ZipWriterOptions`, `TarWriterOptions`, `GZipWriterOptions`, and `SevenZipWriterOptions`) opts in to a format's optional parallel encode. No writer currently implements parallel encoding, so this is a no-op today; it is reserved for future use and mirrors `ReaderOptions.EnableParallelism`.
+`WriterOptions.EnableParallelism` (also available on `ZipWriterOptions`, `TarWriterOptions`, `GZipWriterOptions`, and `SevenZipWriterOptions`) opts in to a format's optional parallel encode. `SevenZipWriterOptions.EnableParallelism` enables parallel folder and LZMA2 block encoding; see Parallel 7z encoding below. Other writer implementations currently reserve this option for future use. It mirrors `ReaderOptions.EnableParallelism`.
 
 ### LZMA encoder selection
 
@@ -1091,3 +1091,37 @@ Progress reports packed bytes for copied folders and uncompressed bytes for
 recompressed or added files, using the existing writer progress mechanism.
 Synchronous updates use synchronous I/O; asynchronous updates use asynchronous
 I/O with cancellation, without mixing decoder modes.
+
+### Parallel 7z encoding
+
+`SevenZipWriterOptions.EnableParallelism` opts into ordered parallel encoding (default `false`,
+which retains the existing byte-for-byte encoding path). `MaxThreads` defaults to
+`Environment.ProcessorCount` and must be at least 1. `MemoryBudget` is a nullable byte limit
+(default `null`); non-null values must be positive. These limits apply only to parallel encoding,
+including recompression and additions through `SevenZipUpdate`.
+
+LZMA2 jobs normally split each folder at `clamp(4 * reduced dictionary size, 1 MiB, 256 MiB)`.
+When the total input is known (a seekable non-solid source or a solid block's `ExpectedSize`)
+and this gives fewer blocks than `MaxThreads`, the block size shrinks to
+`ceil(size / MaxThreads)` rounded up to 1 MiB, at least the reduced dictionary and 1 MiB,
+and at most the normal block size. Unknown sizes retain the normal block size.
+LZMA uses one job per folder. Copy uses no compression worker. File CRCs and branch filtering
+remain sequential, as do ordered output, packed CRCs and each folder's AES-CBC encryption.
+Unencrypted output is deterministic for fixed options, including `MaxThreads`. Adaptive splitting
+can change output across thread counts; unknown sizes and sizes with enough normal blocks retain
+the same splitting. Encryption continues to use fresh random IVs. Splitting can change compression
+ratio compared with serial encoding.
+
+Thread slots count unfinished compression jobs; any completed worker releases its slot even
+when an earlier job is still running. Finished heads are committed eagerly in order.
+Admission charges input and output buffers plus encoder memory: `11.5 * dictionary + 4 MiB`
+for BT2/BT4, or `7.5 * dictionary + 4 MiB` for HC4. Input/output storage spills to a temporary
+file above 256 MiB per buffer (only unsplittable LZMA folders reach it); output allowance includes
+framing overhead. Finished jobs are charged only their actual output length until committed.
+With no budget, admission stops while finished uncommitted output exceeds
+`max(256 MiB, MaxThreads * 32 MiB)`; jobs already running can still finish above that threshold.
+If nothing is running, one job may always be admitted, even above the budget or output threshold.
+At most one additional input block is pending. The budget is an estimate for jobs, not a
+process-wide managed-memory limit.
+Async cancellation stops waiting and encoding; failure cleanup joins workers and releases
+pooled buffers and temporary files. Input streams are fully consumed before `Write*` returns.
