@@ -14,6 +14,7 @@ namespace SharpCompress.Common.SevenZip;
 /// </summary>
 internal sealed class PackedStream
 {
+    public bool PreserveFolderCrc { get; init; }
     public CFolder Folder { get; init; } = new();
     public ulong[] Sizes { get; init; } = [];
     public uint?[] CRCs { get; init; } = [];

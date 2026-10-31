@@ -604,3 +604,35 @@ For automatic grouping instead, set `Solid = true` in `SevenZipWriterOptions`, o
 with `SolidBlockSize` (input bytes, default 64 MiB) and `SolidBlockFileCount` (default 1,000).
 Do not call `BeginSolidBlock` in that mode. Limits split between files; a single oversized
 file is allowed and non-seekable file sizes are checked after writing.
+
+### Update a 7z archive without recompressing unchanged folders
+
+```csharp
+using var source = File.OpenRead("original.7z");
+using var update = await SevenZipUpdate.OpenAsync(
+    source, ReaderOptions.ForExternalStream, cancellationToken);
+foreach (var entry in update.Entries)
+{
+    if (entry.Name == "obsolete.txt")
+        update.Delete(entry.Index);
+    if (entry.Name == "old-name.txt")
+        update.Rename(entry.Index, "new-name.txt");
+}
+using var destination = File.Create("updated.7z");
+await update.WriteToAsync(destination, new SevenZipWriterOptions(),
+    async (writer, token) =>
+    {
+        using var addition = File.OpenRead("new-file.txt");
+        await writer.WriteAsync("new-file.txt", addition, null, token);
+    }, cancellationToken);
+```
+
+Use `SharpCompress.Writers.SevenZip` and `SharpCompress.Readers`. Both archive
+streams must be seekable and refer to different files. The source always stays
+open; replace the original only after successful completion and closing both
+streams. `WriteTo` and `Open` provide synchronous equivalents. The callback may
+plan additions with `BeginSolidBlock`/`EndSolidBlockAsync` but must not dispose the
+writer. Updates are single-use. Set the source password in `ReaderOptions` and
+the destination password/header encryption in `SevenZipWriterOptions`; changing
+the data password recompresses the affected folders. Progress counts copied
+packed bytes and recompressed/added uncompressed bytes.

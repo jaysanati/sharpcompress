@@ -1043,3 +1043,50 @@ of every incorrect password, particularly for data without compression or integr
 
 For 7z archives, `IsEncrypted` is true when any entry has an AES-encrypted data stream.
 Streamless empty files and directories are not encrypted. Archives without files return false.
+
+### Update an existing 7z archive
+
+`SharpCompress.Writers.SevenZip.SevenZipUpdate` is a sealed, disposable, single-use
+update session. `Open(Stream, ReaderOptions? = null)` and
+`OpenAsync(Stream, ReaderOptions? = null, CancellationToken = default)` read a
+seekable source, which always remains open, including after disposal. Split
+sources are unsupported. `IsSourceEncrypted` includes encrypted headers.
+
+`Entries` is an `IReadOnlyList<SevenZipUpdateEntry>` in source order. Each entry
+exposes `Index`, current `Name`, `IsDirectory`, `IsAnti`, `Size`, nullable `Crc`,
+`CreationTime`, `LastAccessTime`, `ModificationTime`, nullable raw `uint` attributes
+(`Attributes`, including Unix modes), `FolderIndex` (-1 for streamless entries),
+and `IsDeleted`. Edit entries through `Delete(int)`, `Rename(int, string)` and
+`SetMetadata(int, SevenZipWriterEntryOptions)`. Metadata replacement includes all
+three times and attributes; null omits the field. If any entry has attributes,
+undefined attributes receive the directory/file defaults 0x10/0x20.
+
+```csharp
+void WriteTo(Stream destination, SevenZipWriterOptions options,
+    Action<SevenZipWriter>? add = null);
+ValueTask WriteToAsync(Stream destination, SevenZipWriterOptions options,
+    Func<SevenZipWriter, CancellationToken, ValueTask>? add = null,
+    CancellationToken cancellationToken = default);
+```
+
+The destination must be a separate, writable, seekable stream; its ownership
+follows `LeaveStreamOpen`. The optional callback adds files, directories and solid
+blocks after kept entries and before finalization. Do not dispose its writer.
+After writing starts, further mutations or writes throw `InvalidOperationException`.
+Invalid entry indexes throw `ArgumentOutOfRangeException`. Renames use writer path
+normalization. Source entries retain their relative order, followed by additions.
+
+Unchanged folders copy all packed streams and coder metadata without invoking a
+codec. Partial deletion decodes the folder once and streams surviving entries into
+one solid block using the destination codec and LZMA properties. X86/ARM64 filters
+are retained only with LZMA2. Fully deleted folders disappear. A change in data
+encryption or password also requires recompression. Encrypted folders can copy
+only with the same ordinal password; copied folders keep their salt and IV.
+Destination header encryption follows `EncryptHeader`. Anti-items, streamless
+states, defined timestamps and raw attributes survive; start positions, dummy
+properties and comments are dropped.
+
+Progress reports packed bytes for copied folders and uncompressed bytes for
+recompressed or added files, using the existing writer progress mechanism.
+Synchronous updates use synchronous I/O; asynchronous updates use asynchronous
+I/O with cancellation, without mixing decoder modes.

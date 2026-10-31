@@ -53,7 +53,11 @@ public partial class SevenZipWriter
 
         // Build the header structures
         var mainStreamsInfo = BuildStreamsInfo();
-        var filesInfo = new SevenZipFilesInfoWriter { Entries = entries.ToArray() };
+        var filesInfo = new SevenZipFilesInfoWriter
+        {
+            Entries = entries.ToArray(),
+            FillMissingAttributes = isUpdate,
+        };
 
         // Write header to a temporary stream first
         using var headerStream = new PooledMemoryStream();

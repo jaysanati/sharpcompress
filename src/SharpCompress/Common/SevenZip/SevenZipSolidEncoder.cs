@@ -141,6 +141,13 @@ internal sealed class SevenZipSolidEncoder : IDisposable, IAsyncDisposable
         return size;
     }
 
+    // Updates preserve stream-bearing zero-length entries as real substreams.
+    internal void RecordEmptyStream()
+    {
+        sizes.Add(0);
+        crcs.Add(0);
+    }
+
     private void RecordFile(long size, uint crc)
     {
         if (size == 0)

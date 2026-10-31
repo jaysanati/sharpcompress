@@ -20,6 +20,7 @@ internal sealed class SevenZipWriteEntry
     public uint? Attributes { get; init; } = 0x20; // FILE_ATTRIBUTE_ARCHIVE
     public bool IsDirectory { get; init; }
     public bool IsEmpty { get; init; }
+    public bool IsAnti { get; init; }
 }
 
 /// <summary>
@@ -29,6 +30,7 @@ internal sealed class SevenZipWriteEntry
 internal sealed class SevenZipFilesInfoWriter
 {
     public SevenZipWriteEntry[] Entries { get; init; } = [];
+    public bool FillMissingAttributes { get; init; }
 
     public void Write(Stream stream)
     {
@@ -49,6 +51,12 @@ internal sealed class SevenZipFilesInfoWriter
         if (emptyStreamCount > 0)
         {
             WriteEmptyStreamProperty(stream, emptyStreamCount);
+        }
+
+        if (Array.Exists(Entries, entry => entry.IsAnti))
+        {
+            WritePropertyHeader(stream, BlockType.Anti, ((long)emptyStreamCount + 7) / 8);
+            WriteFlags(stream, BlockType.Anti);
         }
 
         // Names property
@@ -212,23 +220,31 @@ internal sealed class SevenZipFilesInfoWriter
             return;
         }
 
+        var allDefined = definedCount == Entries.Length || FillMissingAttributes;
         WritePropertyHeader(
             stream,
             BlockType.WinAttributes,
             2L
-                + (definedCount == Entries.Length ? 0 : (Entries.LongLength + 7) / 8)
-                + 4L * definedCount
+                + (allDefined ? 0 : (Entries.LongLength + 7) / 8)
+                + 4L * (allDefined ? Entries.Length : definedCount)
         );
-        stream.WriteByte((byte)(definedCount == Entries.Length ? 1 : 0));
-        if (definedCount != Entries.Length)
+        stream.WriteByte((byte)(allDefined ? 1 : 0));
+        if (!allDefined)
         {
             WriteFlags(stream, BlockType.WinAttributes);
         }
         stream.WriteByte(0);
         Span<byte> buf = stackalloc byte[4];
-        for (var i = 0; i < Entries.Length; i++)
+        foreach (var entry in Entries)
         {
-            if (Entries[i].Attributes is { } attrs)
+            var attributes = entry.Attributes;
+            // Update inputs may contain undefined attributes. Keep the vector fully
+            // defined for libarchive while preserving legacy header-writer behavior.
+            if (FillMissingAttributes)
+            {
+                attributes ??= entry.IsDirectory ? 0x10u : 0x20u;
+            }
+            if (attributes is { } attrs)
             {
                 System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(buf, attrs);
                 stream.Write(buf);
@@ -252,7 +268,7 @@ internal sealed class SevenZipFilesInfoWriter
         foreach (var entry in Entries)
         {
             var empty = entry.IsEmpty || entry.IsDirectory;
-            if (property == BlockType.EmptyFile && !empty)
+            if ((property == BlockType.EmptyFile || property == BlockType.Anti) && !empty)
             {
                 continue;
             }
@@ -260,6 +276,7 @@ internal sealed class SevenZipFilesInfoWriter
             {
                 BlockType.EmptyStream => empty,
                 BlockType.EmptyFile => !entry.IsDirectory,
+                BlockType.Anti => entry.IsAnti,
                 BlockType.CTime or BlockType.ATime or BlockType.MTime => GetTime(entry, property)
                     is not null,
                 BlockType.WinAttributes => entry.Attributes is not null,

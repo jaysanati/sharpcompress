@@ -289,7 +289,11 @@ public partial class SevenZipWriter : AbstractWriter
 
         // Build the header structures
         var mainStreamsInfo = BuildStreamsInfo();
-        var filesInfo = new SevenZipFilesInfoWriter { Entries = entries.ToArray() };
+        var filesInfo = new SevenZipFilesInfoWriter
+        {
+            Entries = entries.ToArray(),
+            FillMissingAttributes = isUpdate,
+        };
 
         // Write header to a temporary stream first
         using var headerStream = new PooledMemoryStream();
@@ -443,9 +447,15 @@ public partial class SevenZipWriter : AbstractWriter
             {
                 numUnPackStreamsPerFolder[i] = 1;
                 unpackSizes.Add((ulong)packed.Folder.GetUnpackSize());
-                fileCRCs.Add(packed.Folder._unpackCrc);
+                if (!packed.PreserveFolderCrc || packed.Folder._unpackCrc is null)
+                {
+                    fileCRCs.Add(packed.Folder._unpackCrc);
+                }
             }
-            packed.Folder._unpackCrc = null;
+            if (!packed.PreserveFolderCrc)
+            {
+                packed.Folder._unpackCrc = null;
+            }
         }
         return new SevenZipStreamsInfoWriter
         {
@@ -470,7 +480,7 @@ public partial class SevenZipWriter : AbstractWriter
     /// Normalizes a filename for 7z archive storage.
     /// Converts backslashes to forward slashes and removes leading slashes.
     /// </summary>
-    private static string NormalizeFilename(string filename)
+    internal static string NormalizeFilename(string filename)
     {
         filename = filename.Replace('\\', '/');
 

@@ -101,3 +101,14 @@ Formats like Zip, 7Zip, Rar are archive formats only. They use other compression
 GZip, BZip2, LZip, XZ, LZW, and ZStandard are single file or compression wrapper formats. The overlap in the API happens because Tar uses these formats as "compression" methods and the API tries to hide this a bit.
 
 `ArchiveType` represents archive containers exposed by the high-level APIs (`Rar`, `Zip`, `Tar`, `SevenZip`, `GZip`, `Arc`, `Arj`, `Ace`, and `Lzw`). `XZ` and `ZStandard` are represented as `CompressionType` values rather than `ArchiveType` values.
+
+### 7z updates
+
+`SevenZipUpdate` writes a separate seekable destination from a seekable source.
+Unchanged folders copy raw packed streams, including multi-stream BCJ2 and codecs
+or filters the writer cannot encode (PPMd, Deflate, BZip2, ZSTD, Delta and branch
+filters). Partial deletion or an encryption/password change requires decoder
+support and recompresses survivors with Copy, LZMA or LZMA2. X86/ARM64 filters are
+retained when recompressing to LZMA2. Renames and metadata edits change headers
+only. Anti-items, timestamps and raw attributes are preserved. Split sources are
+not supported by this update API.
