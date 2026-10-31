@@ -44,6 +44,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
     {
         var isLzma2 = compressionType == CompressionType.LZMA2;
         encoderProperties ??= new LzmaEncoderProperties(eos: !isLzma2);
+        encoderProperties = ReduceDictionary(inputStream, encoderProperties);
 
         var outStartOffset = outputStream.Position;
 
@@ -125,6 +126,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
 
         var isLzma2 = compressionType == CompressionType.LZMA2;
         encoderProperties ??= new LzmaEncoderProperties(eos: !isLzma2);
+        encoderProperties = ReduceDictionary(inputStream, encoderProperties);
 
         var outStartOffset = outputStream.Position;
 
@@ -300,6 +302,51 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
+
+    private static LzmaEncoderProperties ReduceDictionary(
+        Stream inputStream,
+        LzmaEncoderProperties properties
+    )
+    {
+        if (!inputStream.CanSeek)
+        {
+            return properties;
+        }
+
+        var remaining = inputStream.Length - inputStream.Position;
+        if (remaining >= properties.DictionarySize)
+        {
+            return properties;
+        }
+
+        // Match 7-Zip's normalization, including the 4 KiB minimum. Long
+        // arithmetic avoids overflow at the upper end of the candidate sequence.
+        for (var i = 11; i <= 30; i++)
+        {
+            for (var multiplier = 2L; multiplier <= 3; multiplier++)
+            {
+                var dictionary = multiplier << i;
+                if (dictionary >= remaining)
+                {
+                    var eos = false;
+                    for (var property = 0; property < properties.PropIDs.Length; property++)
+                    {
+                        if (properties.PropIDs[property] == CoderPropId.EndMarker)
+                        {
+                            eos = (bool)properties.Properties[property];
+                            break;
+                        }
+                    }
+                    return new LzmaEncoderProperties(
+                        eos,
+                        checked((int)dictionary),
+                        properties.NumFastBytes
+                    );
+                }
+            }
+        }
+        return properties;
     }
 
     private static PackedStream BuildPackedStream(
