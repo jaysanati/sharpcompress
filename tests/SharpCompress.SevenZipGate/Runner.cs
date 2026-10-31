@@ -73,8 +73,10 @@ internal sealed partial class Runner(Options options, CancellationToken cancella
                     long archiveBytes = 0;
                     var notes =
                         engine == "sc-lzma-par"
-                            ? $"Estimate only; no archive overhead; per-file dictionary reduction; BT4; {options.ParallelThreads} threads"
+                            ? $"Estimate only; no archive overhead; per-file dictionary reduction; {options.ParallelThreads} threads"
                             : "";
+                    notes +=
+                        $" mode={(level == 1 ? "fast" : "normal")}; matchFinder={(level == 1 ? "HC4" : "BT4")};";
                     try
                     {
                         var single =
@@ -371,7 +373,7 @@ internal sealed partial class Runner(Options options, CancellationToken cancella
                     };
                     settings.Add(level, (dictionary, level == 9 ? 64 : 32));
                     Console.WriteLine(
-                        $"probe mx{level}: dictionary={dictionary}, fastBytes={(level == 9 ? 64 : 32)}, SC matchFinder=BT4"
+                        $"probe mx{level}: dictionary={dictionary}, fastBytes={(level == 9 ? 64 : 32)}, SC mode={(level == 1 ? "fast" : "normal")}, matchFinder={(level == 1 ? "HC4" : "BT4")}"
                     );
                 }
                 finally
@@ -452,12 +454,12 @@ internal sealed partial class Runner(Options options, CancellationToken cancella
         foreach (var (level, setting) in settings)
         {
             _ = text.AppendLine(
-                $"mx{level}: LZMA dictionary={setting.Dictionary}; fastBytes={setting.FastBytes}; SC match finder=BT4; 7-Zip match finder={(level == 1 ? "HC4" : "BT4")}"
+                $"mx{level}: LZMA dictionary={setting.Dictionary}; fastBytes={setting.FastBytes}; SC mode={(level == 1 ? "fast" : "normal")}; SC match finder={(level == 1 ? "HC4" : "BT4")}; 7-Zip match finder={(level == 1 ? "HC4" : "BT4")}"
             );
         }
 
         _ = text.AppendLine(
-            "sc-enci-today mx0: default properties; dictionary=1048576; fastBytes=32; BT4"
+            "sc-enci-today mx0: default properties; dictionary=1048576; fastBytes=32; mode=normal; matchFinder=BT4"
         );
         _ = text.AppendLine(
             "Dictionary values are configured maxima; known per-file sizes reduce the SC dictionary. Native LZMA2/default settings remain controlled by 7-Zip -mx."

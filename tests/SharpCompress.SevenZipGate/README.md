@@ -35,3 +35,10 @@ Create `<root>/STOP` or press Ctrl+C to stop. Remove STOP before resuming. Outpu
 
 `results/results.csv` is the resumable invariant-culture record. `results.md` includes per-dataset and gate comparison tables. `environment.txt` records probed LZMA dictionaries, runtime, hardware, and native settings. `run.log` records child command lines and output. Dictionary columns describe configured maxima; SharpCompress reduces them for each known input size. Native LZMA2/default settings are controlled by 7-Zip. The parallel estimate omits archive/header overhead and records verification as `n/a`. Native timeout progress is unavailable and remains zero; managed children report bytes read once per second.
 `sc-lzma2-1t` runs immediately after `sc-lzma-1t`, using LZMA2 with the same probed dictionary and fast-byte settings. Both are single-threaded, pinned to `--pin-mask`, and their archives are verified with `7z t`. The Gate table reports `SC LZMA2 / 7z LZMA wall` alongside the existing comparisons.
+
+For sc-lzma-1t, sc-lzma2-1t, and sc-lzma-par, level 1 uses LZMA fast parsing
+and HC4, matching 7-Zip's -mx1 choices. Levels 5 and 9 use normal parsing and BT4.
+The level 0 sc-enci-today baseline retains the default normal + BT4 settings.
+Each level's mode and match finder are recorded in environment.txt, the CSV
+match-finder column, and result notes. Use --rerun when comparing with older
+results, whose managed level 1 used normal + BT4.

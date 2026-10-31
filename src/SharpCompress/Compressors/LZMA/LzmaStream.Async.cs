@@ -467,6 +467,14 @@ public partial class LzmaStream
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        if (_lzma2Encoder is not null)
+        {
+            await _lzma2Encoder
+                .WriteAsync(buffer, offset, count, cancellationToken)
+                .ConfigureAwait(false);
+            _position += count;
+            return;
+        }
         if (_encoder != null)
         {
             _position = await _encoder
@@ -483,6 +491,12 @@ public partial class LzmaStream
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        if (_lzma2Encoder is not null)
+        {
+            await _lzma2Encoder.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            _position += buffer.Length;
+            return;
+        }
         if (_encoder != null)
         {
             using var input = new ReadOnlyMemoryStream(buffer);
@@ -506,6 +520,10 @@ public partial class LzmaStream
         _isDisposed = true;
         try
         {
+            if (_lzma2Encoder is not null)
+            {
+                await _lzma2Encoder.DisposeAsync().ConfigureAwait(false);
+            }
             if (_encoder != null)
             {
                 _position = await _encoder.CodeAsync(null, true).ConfigureAwait(false);

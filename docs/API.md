@@ -520,6 +520,30 @@ archive.SaveTo("output.zip", options);
 
 `WriterOptions.EnableParallelism` (also available on `ZipWriterOptions`, `TarWriterOptions`, `GZipWriterOptions`, and `SevenZipWriterOptions`) opts in to a format's optional parallel encode. No writer currently implements parallel encoding, so this is a no-op today; it is reserved for future use and mirrors `ReaderOptions.EnableParallelism`.
 
+### LZMA encoder selection
+
+`SharpCompress.Compressors.LZMA.LzmaEncoderProperties` has an overload
+`(bool eos, int dictionary, int numFastBytes, LzmaMatchFinder matchFinder, LzmaEncoderMode mode)`.
+`MatchFinder` and `Mode` are read-only properties. Match finders are `BT2`, `BT4`,
+and `HC4`; parsing modes are `Fast` and `Normal`. All six combinations work with
+LZMA and LZMA2, synchronously and asynchronously. Existing constructors retain
+BT4 + normal parsing and byte-identical LZMA output. Invalid enum values throw
+`InvalidParamException`.
+
+```csharp
+var fastProperties = new LzmaEncoderProperties(
+    eos: false, dictionary: 1 << 20, numFastBytes: 32,
+    matchFinder: LzmaMatchFinder.HC4, mode: LzmaEncoderMode.Fast);
+```
+
+Assign these properties to `SevenZipWriterOptions.LzmaProperties` for either codec.
+`LzmaStream.Create(fastProperties, isLzma2: true, outputStream)` writes a raw
+LZMA2 stream; use `false` for raw LZMA. Keep the returned `Properties` bytes for
+decoding. Compression leaves the output stream open. `WriteAsync` and
+`DisposeAsync` use asynchronous output I/O. LZMA2 framing supplies its own end
+marker, regardless of `eos`; preset dictionaries are not supported for LZMA2
+compression and are rejected with `InvalidParamException`.
+
 ### 7z entry metadata and Store
 
 `SevenZipWriterOptions.CompressionType` accepts `None` (Store using the Copy coder),

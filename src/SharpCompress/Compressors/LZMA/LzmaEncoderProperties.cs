@@ -31,15 +31,40 @@ public class LzmaEncoderProperties
     public LzmaEncoderProperties(bool eos, int dictionary)
         : this(eos, dictionary, 32) { }
 
+    /// <summary>The match finder used by this encoder.</summary>
+    public LzmaMatchFinder MatchFinder { get; }
+
+    /// <summary>The parsing mode used by this encoder.</summary>
+    public LzmaEncoderMode Mode { get; }
+
     public LzmaEncoderProperties(bool eos, int dictionary, int numFastBytes)
+        : this(eos, dictionary, numFastBytes, LzmaMatchFinder.BT4, LzmaEncoderMode.Normal) { }
+
+    /// <summary>Configure the dictionary, match finder and parsing mode.</summary>
+    public LzmaEncoderProperties(
+        bool eos,
+        int dictionary,
+        int numFastBytes,
+        LzmaMatchFinder matchFinder,
+        LzmaEncoderMode mode
+    )
     {
+        if (
+            matchFinder is not (LzmaMatchFinder.BT2 or LzmaMatchFinder.BT4 or LzmaMatchFinder.HC4)
+            || mode is not (LzmaEncoderMode.Fast or LzmaEncoderMode.Normal)
+        )
+        {
+            throw new InvalidParamException();
+        }
+        MatchFinder = matchFinder;
+        Mode = mode;
         DictionarySize = dictionary;
         NumFastBytes = numFastBytes;
         var posStateBits = 2;
         var litContextBits = 3;
         var litPosBits = 0;
-        var algorithm = 2;
-        var mf = "bt4";
+        var algorithm = (int)mode;
+        var mf = matchFinder.ToString();
 
         _propIDs = new[]
         {

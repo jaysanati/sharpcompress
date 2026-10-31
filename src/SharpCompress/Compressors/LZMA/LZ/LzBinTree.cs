@@ -6,7 +6,7 @@ using System.IO;
 
 namespace SharpCompress.Compressors.LZMA.LZ;
 
-internal sealed class BinTree : InWindow
+internal sealed class BinTree : InWindow, IMatchFinder
 {
     private readonly ArrayPool<uint> _pool;
 

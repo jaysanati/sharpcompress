@@ -371,6 +371,18 @@ using Stream source = File.OpenRead("input.txt");
 writer.Write("input.txt", source, DateTime.UtcNow);
 ```
 
+For fast LZMA or LZMA2 compression, set `LzmaProperties` on the writer options:
+
+```csharp
+LzmaProperties = new LzmaEncoderProperties(
+    eos: false, dictionary: 1 << 20, numFastBytes: 32,
+    matchFinder: LzmaMatchFinder.HC4, mode: LzmaEncoderMode.Fast),
+```
+
+These types are in `SharpCompress.Compressors.LZMA`. Use normal + BT4 (the defaults)
+when compression ratio matters more than encoding speed. All three match finders
+can be combined with either parsing mode.
+
 ### Store 7z files with per-entry metadata
 
 ```csharp

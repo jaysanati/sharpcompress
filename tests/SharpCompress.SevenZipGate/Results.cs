@@ -48,7 +48,6 @@ internal sealed class Results(Options options)
         string notes
     )
     {
-        var managed = engine.StartsWith("sc-", StringComparison.Ordinal);
         object[] values =
         [
             DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
@@ -59,9 +58,7 @@ internal sealed class Results(Options options)
             level,
             dictionary,
             fastBytes,
-            managed ? "BT4"
-            : level == 1 ? "HC4"
-            : "BT4",
+            level == 1 ? "HC4" : "BT4",
             engine is "7z-lzma-1t" or "sc-lzma-1t" or "sc-lzma2-1t" or "sc-enci-today"
                 ? 1
                 : Environment.ProcessorCount,

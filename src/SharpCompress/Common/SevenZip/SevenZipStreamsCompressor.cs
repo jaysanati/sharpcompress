@@ -75,11 +75,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         if (isLzma2)
         {
             // LZMA2: use Lzma2EncoderStream for chunk-based framing
-            using var lzma2Stream = new Lzma2EncoderStream(
-                codecOutput,
-                encoderProperties.DictionarySize,
-                encoderProperties.NumFastBytes
-            );
+            using var lzma2Stream = new Lzma2EncoderStream(codecOutput, encoderProperties);
 
             CopyWithCrc(inputStream, lzma2Stream, out var inputCrc2, out var inputSize2);
             lzma2Stream.Dispose();
@@ -184,8 +180,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
             {
                 await using var lzma2Stream = new Lzma2EncoderStream(
                     codecOutput,
-                    encoderProperties.DictionarySize,
-                    encoderProperties.NumFastBytes
+                    encoderProperties
                 );
 
                 (inputCrc2, inputSize2) = await CopyWithCrcAsync(
@@ -377,7 +372,9 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
                     return new LzmaEncoderProperties(
                         eos,
                         checked((int)dictionary),
-                        properties.NumFastBytes
+                        properties.NumFastBytes,
+                        properties.MatchFinder,
+                        properties.Mode
                     );
                 }
             }

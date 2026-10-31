@@ -41,7 +41,9 @@ internal static class ManagedCompression
                             new LzmaEncoderProperties(
                                 true,
                                 ReduceDictionary(input.Length, options.Dictionary),
-                                options.FastBytes
+                                options.FastBytes,
+                                level == 1 ? LzmaMatchFinder.HC4 : LzmaMatchFinder.BT4,
+                                level == 1 ? LzmaEncoderMode.Fast : LzmaEncoderMode.Normal
                             ),
                             false,
                             output
@@ -77,7 +79,9 @@ internal static class ManagedCompression
                                 : new LzmaEncoderProperties(
                                     engine != "sc-lzma2-1t",
                                     options.Dictionary,
-                                    options.FastBytes
+                                    options.FastBytes,
+                                    level == 1 ? LzmaMatchFinder.HC4 : LzmaMatchFinder.BT4,
+                                    level == 1 ? LzmaEncoderMode.Fast : LzmaEncoderMode.Normal
                                 ),
                         LeaveStreamOpen = true,
                     }

@@ -29,6 +29,9 @@ internal sealed class Lzma2EncoderStream : Stream
     private bool _isDisposed;
     private bool _faulted;
 
+    public Lzma2EncoderStream(Stream output, LzmaEncoderProperties properties)
+        : this(output, properties, ArrayPool<byte>.Shared) { }
+
     public Lzma2EncoderStream(Stream output, int dictionarySize, int numFastBytes)
         : this(output, dictionarySize, numFastBytes, ArrayPool<byte>.Shared) { }
 
@@ -38,16 +41,24 @@ internal sealed class Lzma2EncoderStream : Stream
         int numFastBytes,
         ArrayPool<byte> bufferPool
     )
+        : this(output, new LzmaEncoderProperties(false, dictionarySize, numFastBytes), bufferPool)
+    { }
+
+    private Lzma2EncoderStream(
+        Stream output,
+        LzmaEncoderProperties encoderProps,
+        ArrayPool<byte> bufferPool
+    )
     {
         _output = output;
         _bufferPool = bufferPool;
-        var encoderProps = new LzmaEncoderProperties(eos: false, dictionarySize, numFastBytes);
+
         _encoder = new Encoder();
         _encoder.SetCoderProperties(encoderProps.PropIDs, encoderProps.Properties);
         Span<byte> properties = stackalloc byte[5];
         _encoder.WriteCoderProperties(properties);
         _lzmaPropertiesByte = properties[0];
-        Properties = [EncodeDictionarySize(dictionarySize)];
+        Properties = [EncodeDictionarySize(encoderProps.DictionarySize)];
         // Rent after validation, so invalid properties cannot strand a buffer.
         _buffer = bufferPool.Rent(MAX_UNCOMPRESSED_CHUNK_SIZE);
     }

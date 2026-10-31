@@ -37,6 +37,7 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
 #endif
 
     private readonly Encoder? _encoder;
+    private readonly Lzma2EncoderStream? _lzma2Encoder;
     private byte[]? _asyncHeaderBuffer;
     private bool _isDisposed;
     private ReadMode _readMode;
@@ -173,7 +174,7 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         }
     }
 
-    private LzmaStream(LzmaEncoderProperties properties, bool isLzma2)
+    private LzmaStream(LzmaEncoderProperties properties, bool isLzma2, Stream outputStream)
     {
         _isLzma2 = isLzma2;
         _availableBytes = 0;
@@ -181,7 +182,9 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
 
         if (isLzma2)
         {
-            throw new NotImplementedException();
+            _lzma2Encoder = new Lzma2EncoderStream(outputStream, properties);
+            Properties = _lzma2Encoder.Properties;
+            return;
         }
 
         _encoder = new Encoder();
@@ -204,7 +207,16 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         Stream outputStream
     )
     {
-        var lzma = new LzmaStream(properties, isLzma2);
+        if (isLzma2 && presetDictionary is not null)
+        {
+            // LZMA2 starts with a dictionary reset, so an external dictionary cannot be used.
+            throw new InvalidParamException();
+        }
+        var lzma = new LzmaStream(properties, isLzma2, outputStream);
+        if (isLzma2)
+        {
+            return lzma;
+        }
         try
         {
             lzma._encoder!.SetStreams(null, outputStream, -1, -1);
@@ -222,11 +234,12 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         }
     }
 
-    public override bool CanRead => !_isDisposed && _encoder == null;
+    public override bool CanRead => !_isDisposed && _encoder is null && _lzma2Encoder is null;
 
     public override bool CanSeek => false;
 
-    public override bool CanWrite => !_isDisposed && _encoder != null;
+    public override bool CanWrite =>
+        !_isDisposed && (_encoder is not null || _lzma2Encoder is not null);
 
     public override void Flush() { }
 
@@ -241,6 +254,10 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         _isDisposed = true;
         try
         {
+            if (disposing)
+            {
+                _lzma2Encoder?.Dispose();
+            }
             if (disposing && _encoder != null)
             {
                 _position = _encoder.Code(null, true);
@@ -641,6 +658,12 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
     public override void Write(byte[] buffer, int offset, int count)
     {
         ThrowIfDisposed();
+        if (_lzma2Encoder is not null)
+        {
+            _lzma2Encoder.Write(buffer, offset, count);
+            _position += count;
+            return;
+        }
         if (_encoder != null)
         {
             _position = _encoder.Code(new MemoryStream(buffer, offset, count), false);

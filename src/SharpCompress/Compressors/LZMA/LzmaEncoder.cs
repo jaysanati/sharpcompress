@@ -17,6 +17,7 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
     {
         Bt2,
         Bt4,
+        Hc4,
     }
 
     private const uint K_IFINITY_PRICE = 0xFFFFFFF;
@@ -492,7 +493,7 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
     }
 
     private Optimal[] _optimum;
-    private BinTree _matchFinder;
+    private IMatchFinder _matchFinder;
     private readonly RangeCoder.Encoder _rangeEncoder = new();
 
     private readonly BitEncoder[] _isMatch = new BitEncoder[
@@ -562,6 +563,8 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
 
     private EMatchFinderType _matchFinderType = EMatchFinderType.Bt4;
     private bool _writeEndMark;
+    private bool _fastMode;
+    private uint? _matchFinderCycles;
 
     private bool _needReleaseMfStream;
     private bool _processingMode;
@@ -570,14 +573,21 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
     {
         if (_matchFinder is null)
         {
-            var bt = new BinTree();
-            var numHashBytes = 4;
-            if (_matchFinderType == EMatchFinderType.Bt2)
+            if (_matchFinderType == EMatchFinderType.Hc4)
             {
-                numHashBytes = 2;
+                _matchFinder = new HashChain();
             }
-            bt.SetType(numHashBytes);
-            _matchFinder = bt;
+            else
+            {
+                var bt = new BinTree();
+                var numHashBytes = 4;
+                if (_matchFinderType == EMatchFinderType.Bt2)
+                {
+                    numHashBytes = 2;
+                }
+                bt.SetType(numHashBytes);
+                _matchFinder = bt;
+            }
         }
         _literalEncoder.Create(_numLiteralPosStateBits, _numLiteralContextBits);
 
@@ -591,6 +601,10 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
             _numFastBytes,
             Base.K_MATCH_MAX_LEN + 1 + K_NUM_OPTS
         );
+        if (_matchFinderCycles is uint cycles)
+        {
+            _matchFinder.SetCutValue(cycles);
+        }
         _dictionarySizePrev = _dictionarySize;
         _numFastBytesPrev = _numFastBytes;
     }
@@ -1549,7 +1563,8 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
                 return;
             }
 
-            var len = GetOptimum((uint)_nowPos64, out var pos);
+            uint pos;
+            var len = _fastMode ? GetOptimumFast(out pos) : GetOptimum((uint)_nowPos64, out pos);
 
             var posState = ((uint)_nowPos64) & _posStateMask;
             var complexState = (_state._index << Base.K_NUM_POS_STATES_BITS_MAX) + posState;
@@ -1681,12 +1696,11 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
             CheckLzma2Chunk();
             if (_additionalOffset == 0)
             {
-                // if (!_fastMode)
-                if (_matchPriceCount >= (1 << 7))
+                if (!_fastMode && _matchPriceCount >= (1 << 7))
                 {
                     FillDistancesPrices();
                 }
-                if (_alignPriceCount >= Base.K_ALIGN_TABLE_SIZE)
+                if (!_fastMode && _alignPriceCount >= Base.K_ALIGN_TABLE_SIZE)
                 {
                     FillAlignPrices();
                 }
@@ -1798,7 +1812,8 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
                 return (inSize, outSize, finished);
             }
 
-            var len = GetOptimum((uint)_nowPos64, out var pos);
+            uint pos;
+            var len = _fastMode ? GetOptimumFast(out pos) : GetOptimum((uint)_nowPos64, out pos);
 
             var posState = (uint)_nowPos64 & _posStateMask;
             var complexState = (_state._index << Base.K_NUM_POS_STATES_BITS_MAX) + posState;
@@ -1966,11 +1981,11 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
             _nowPos64 += len;
             if (_additionalOffset == 0)
             {
-                if (_matchPriceCount >= (1 << 7))
+                if (!_fastMode && _matchPriceCount >= (1 << 7))
                 {
                     FillDistancesPrices();
                 }
-                if (_alignPriceCount >= Base.K_ALIGN_TABLE_SIZE)
+                if (!_fastMode && _alignPriceCount >= Base.K_ALIGN_TABLE_SIZE)
                 {
                     FillAlignPrices();
                 }
@@ -2225,7 +2240,7 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
         _alignPriceCount = 0;
     }
 
-    private static readonly string[] K_MATCH_FINDER_I_DS = { "BT2", "BT4" };
+    private static readonly string[] K_MATCH_FINDER_I_DS = { "BT2", "BT4", "HC4" };
 
     private static int FindMatchFinder(string s)
     {
@@ -2265,13 +2280,21 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
                 }
                 case CoderPropId.Algorithm:
                 {
-                    /*
-                    if (!(prop is Int32))
+                    if (prop is not int algorithm || algorithm < 0 || algorithm > 2)
+                    {
                         throw new InvalidParamException();
-                    Int32 maximize = (Int32)prop;
-                    _fastMode = (maximize == 0);
-                    _maxMode = (maximize >= 2);
-                    */
+                    }
+                    _fastMode = algorithm == 0;
+                    break;
+                }
+                case CoderPropId.MatchFinderCycles:
+                {
+                    if (prop is not int cycles || cycles <= 0)
+                    {
+                        throw new InvalidParamException();
+                    }
+                    _matchFinderCycles = (uint)cycles;
+                    _matchFinder?.SetCutValue((uint)cycles);
                     break;
                 }
                 case CoderPropId.MatchFinder:
@@ -2287,9 +2310,10 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
                         throw new InvalidParamException();
                     }
                     _matchFinderType = (EMatchFinderType)m;
-                    if (_matchFinder != null && matchFinderIndexPrev != _matchFinderType)
+                    if (_matchFinder is not null && matchFinderIndexPrev != _matchFinderType)
                     {
                         _dictionarySizePrev = 0xFFFFFFFF;
+                        _matchFinder.Dispose();
                         _matchFinder = null;
                     }
                     break;
