@@ -43,6 +43,7 @@ public partial class SevenZipWriter
 
     private async ValueTask FinalizeArchiveAsync()
     {
+        await EndSolidBlockAsync().ConfigureAwait(false);
         // Reserve the signature even when no file data was written.
         await EnsurePlaceholderWrittenAsync(CancellationToken.None).ConfigureAwait(false);
         var output = OutputStream.NotNull();
@@ -220,6 +221,36 @@ public partial class SevenZipWriter
         }
 
         var output = OutputStream.NotNull();
+        if (UsesSolidBlock)
+        {
+            if (MustSplitBlock(source))
+            {
+                await EndSolidBlockAsync(cancellationToken).ConfigureAwait(false);
+            }
+            long size;
+            try
+            {
+                size = await GetBlockEncoder()
+                    .WriteFileAsync(progressStream, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                // A partial file cannot be removed from a streaming dictionary. Reject further writes.
+                finalized = true;
+                var failedEncoder = blockEncoder;
+                blockEncoder = null;
+                blockOptions = null;
+                if (failedEncoder is not null)
+                {
+                    await failedEncoder.DisposeAsync().ConfigureAwait(false);
+                }
+                throw;
+            }
+            AddSolidEntry(filename, options, size);
+            return;
+        }
+
         var outputPosBefore = output.Position;
         var compressor = new SevenZipStreamsCompressor(output);
         var packed = await compressor

@@ -54,5 +54,8 @@ internal abstract partial class Filter : Stream
 
     public override void SetLength(long value) => throw new NotSupportedException();
 
+    // The solid writer retains the untransformed tail across input chunks and files.
+    internal int TransformBlock(byte[] buffer, int count) => Transform(buffer, 0, count);
+
     protected abstract int Transform(byte[] buffer, int offset, int count);
 }

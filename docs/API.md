@@ -499,7 +499,7 @@ var tarOptions = new TarWriterOptions(CompressionType.GZip, finalizeArchiveOnClo
 // GZip-specific options
 var gzipOptions = new GZipWriterOptions(compressionLevel: 9);
 
-// 7z writing requires a seekable output stream and writes non-solid archives
+// 7z writing requires a seekable output stream; solid blocks are opt-in
 var sevenZipOptions = new SevenZipWriterOptions(CompressionType.LZMA2)
 {
     CompressHeader = true,
@@ -544,6 +544,38 @@ decoding. Compression leaves the output stream open. `WriteAsync` and
 marker, regardless of `eos`; preset dictionaries are not supported for LZMA2
 compression and are rejected with `InvalidParamException`.
 
+### 7z solid blocks and branch filters
+
+`SevenZipWriter.BeginSolidBlock(SevenZipSolidBlockOptions? options = null)` starts a
+folder and closes any previous block. Non-empty files written before
+`EndSolidBlock()` share one encoder in write order. `EndSolidBlockAsync(CancellationToken
+cancellationToken = default)` flushes with asynchronous output I/O. `WriteAsync`
+works inside the same blocks; disposal also ends an open block. Begin is synchronous
+and may flush the previous block: async callers should await `EndSolidBlockAsync`
+before beginning another. Empty files and directories never enter a folder.
+
+`SevenZipSolidBlockOptions` has mutable optional properties:
+
+- `CompressionType` (`CompressionType?`): `None`, `LZMA`, or `LZMA2`; null inherits the writer's codec.
+- `LzmaProperties` (`LzmaEncoderProperties?`): null inherits the writer's properties.
+- `Filter` (`SevenZipFilter`): `None` (default), `X86` (BCJ), or `Arm64`. BCJ2 encoding is not supported.
+- `ExpectedSize` (`long?`): non-negative expected input bytes, used only to reduce the dictionary
+  with the per-file normalization rule (4 KiB minimum). Null retains the configured dictionary.
+
+Settings are captured at Begin. Filters operate continuously across file boundaries.
+With `Password`, each folder uses one AES stream and its own random IV; `EncryptHeader`
+continues to encrypt metadata. Blocks stream directly to the destination without buffering
+all input, and progress is reported per file. Outside blocks, files retain the existing
+independent compression and output representation.
+
+For automatic grouping, set `SevenZipWriterOptions.Solid = true` (default false).
+`SolidBlockSize` defaults to 64 MiB and `SolidBlockFileCount` to 1,000; both must be
+positive. Limits apply between non-empty files. A known-size file starts a new block
+if adding it would exceed the size limit; an oversized file occupies its own block.
+For non-seekable input the size is known only after writing, so a block can exceed
+the byte limit by the last file. Files are never split. Calling `BeginSolidBlock`
+permanently disables automatic grouping for that writer; subsequent files outside
+explicit blocks are independent.
 ### 7z entry metadata and Store
 
 `SevenZipWriterOptions.CompressionType` accepts `None` (Store using the Copy coder),

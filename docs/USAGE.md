@@ -570,3 +570,37 @@ ARC LZW compressed data is buffered incrementally from the bytes actually presen
 ZIP Shrink output buffering grows with decoded output rather than the declared uncompressed size. Invalid codes and output-size mismatches are rejected.
 
 LZMA/LZMA2 dictionary storage starts small and grows with decoded history, up to the supported dictionary size. These safeguards avoid allocations based solely on forged sizes; they do not impose an overall decompressed-output or process-memory limit.
+
+### Write caller-defined solid 7z blocks
+
+Use a seekable destination and group similar files to share their compression dictionary.
+The writer does not buffer a whole block. Empty files and directories keep their entry order
+but do not consume a substream. Files outside blocks are compressed independently.
+
+```csharp
+await using var destination = File.Create("solid.7z");
+await using var writer = new SevenZipWriter(destination, new SevenZipWriterOptions());
+writer.BeginSolidBlock(new SevenZipSolidBlockOptions
+{
+    CompressionType = CompressionType.LZMA2,
+    Filter = SevenZipFilter.X86,
+    ExpectedSize = totalExecutableBytes,
+});
+foreach (var path in executablePaths)
+{
+    await using var source = File.OpenRead(path);
+    await writer.WriteAsync(Path.GetFileName(path), source, File.GetLastWriteTimeUtc(path), cancellationToken);
+}
+await writer.EndSolidBlockAsync(cancellationToken);
+```
+
+Use `SevenZipFilter.Arm64` for ARM64 code or omit the filter for ordinary data.
+`ExpectedSize` is optional; it reduces the dictionary for small blocks. To begin another
+block with entirely asynchronous output, await `EndSolidBlockAsync` first. Disposing the
+writer closes the last block automatically. Set `Password` and optionally `EncryptHeader`
+on the writer options for per-folder encryption.
+
+For automatic grouping instead, set `Solid = true` in `SevenZipWriterOptions`, optionally
+with `SolidBlockSize` (input bytes, default 64 MiB) and `SolidBlockFileCount` (default 1,000).
+Do not call `BeginSolidBlock` in that mode. Limits split between files; a single oversized
+file is allowed and non-seekable file sizes are checked after writing.

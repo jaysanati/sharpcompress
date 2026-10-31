@@ -12,9 +12,8 @@ using SharpCompress.IO;
 namespace SharpCompress.Writers.SevenZip;
 
 /// <summary>
-/// Writes 7z archives in non-solid mode (each file compressed independently).
+/// Writes 7z archives with independent files or caller-defined solid blocks.
 /// Requires a seekable output stream for back-patching the signature header.
-/// TODO: solid mode support in a future iteration.
 /// TODO: IWritableArchive support in a future iteration.
 /// </summary>
 public partial class SevenZipWriter : AbstractWriter
@@ -54,6 +53,13 @@ public partial class SevenZipWriter : AbstractWriter
             throw new ArgumentException("EncryptHeader requires a Password.", nameof(options));
         }
 
+        if (options.SolidBlockSize <= 0 || options.SolidBlockFileCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "Solid block limits must be positive."
+            );
+        }
         sevenZipOptions = options;
 
         if (options.LeaveStreamOpen)
@@ -156,6 +162,31 @@ public partial class SevenZipWriter : AbstractWriter
             return;
         }
 
+        if (UsesSolidBlock)
+        {
+            if (MustSplitBlock(source))
+            {
+                EndSolidBlock();
+            }
+            long size;
+            try
+            {
+                size = GetBlockEncoder().WriteFile(progressStream);
+            }
+            catch
+            {
+                // A partial file cannot be removed from a streaming dictionary. Reject further writes.
+                finalized = true;
+                var failedEncoder = blockEncoder;
+                blockEncoder = null;
+                blockOptions = null;
+                failedEncoder?.Dispose();
+                throw;
+            }
+            AddSolidEntry(filename, options, size);
+            return;
+        }
+
         // Compress file data to output stream
         var output = OutputStream.NotNull();
         var outputPosBefore = output.Position;
@@ -248,6 +279,7 @@ public partial class SevenZipWriter : AbstractWriter
 
     private void FinalizeArchive()
     {
+        EndSolidBlock();
         // Directory-only and empty archives never pass through Write().
         EnsurePlaceholderWritten();
         var output = OutputStream.NotNull();
@@ -394,22 +426,27 @@ public partial class SevenZipWriter : AbstractWriter
             folders[i] = ps.Folder;
         }
 
-        // Build per-file unpack sizes and CRCs for SubStreamsInfo
-        // In non-solid mode, each folder has exactly 1 file
+        // Preserve the single-file representation while flattening solid folder substreams.
         var numUnPackStreamsPerFolder = new ulong[packedStreams.Count];
-        var unpackSizes = new ulong[packedStreams.Count];
-        var fileCRCs = new uint?[packedStreams.Count];
-
+        var unpackSizes = new List<ulong>();
+        var fileCRCs = new List<uint?>();
         for (var i = 0; i < packedStreams.Count; i++)
         {
-            numUnPackStreamsPerFolder[i] = 1;
-            unpackSizes[i] = (ulong)packedStreams[i].Folder.GetUnpackSize();
-            fileCRCs[i] = packedStreams[i].Folder._unpackCrc;
-
-            // Clear folder-level CRC (it's moved to SubStreamsInfo)
-            packedStreams[i].Folder._unpackCrc = null;
+            var packed = packedStreams[i];
+            if (packed.SubStreamSizes is { } subSizes)
+            {
+                numUnPackStreamsPerFolder[i] = (ulong)subSizes.Length;
+                unpackSizes.AddRange(subSizes);
+                fileCRCs.AddRange(packed.SubStreamCRCs!);
+            }
+            else
+            {
+                numUnPackStreamsPerFolder[i] = 1;
+                unpackSizes.Add((ulong)packed.Folder.GetUnpackSize());
+                fileCRCs.Add(packed.Folder._unpackCrc);
+            }
+            packed.Folder._unpackCrc = null;
         }
-
         return new SevenZipStreamsInfoWriter
         {
             PackInfo = new SevenZipPackInfoWriter
@@ -423,8 +460,8 @@ public partial class SevenZipWriter : AbstractWriter
             {
                 Folders = folders,
                 NumUnPackStreamsInFolders = numUnPackStreamsPerFolder,
-                UnPackSizes = unpackSizes,
-                CRCs = fileCRCs,
+                UnPackSizes = unpackSizes.ToArray(),
+                CRCs = fileCRCs.ToArray(),
             },
         };
     }

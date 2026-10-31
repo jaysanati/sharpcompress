@@ -85,6 +85,16 @@ public sealed record SevenZipWriterOptions : IWriterOptions
     /// </summary>
     public bool CompressHeader { get; set; } = true;
 
+    /// <summary>Automatically group files into solid blocks until BeginSolidBlock is called. Default is false.</summary>
+    public bool Solid { get; set; }
+
+    /// <summary>Maximum input bytes per automatic block (64 MiB by default). Files are never split;
+    /// an oversized file occupies its own block, and unknown sizes are checked after writing.</summary>
+    public long SolidBlockSize { get; set; } = 64L << 20;
+
+    /// <summary>Maximum non-empty files per automatic block (1,000 by default).</summary>
+    public int SolidBlockFileCount { get; set; } = 1000;
+
     /// <summary>
     /// Custom LZMA encoder properties. Null uses defaults (1MB dictionary, 32 fast bytes).
     /// </summary>
@@ -92,7 +102,7 @@ public sealed record SevenZipWriterOptions : IWriterOptions
 
     /// <summary>
     /// Password for 7zAES encryption (AES-256-CBC with SHA-256 key derivation, as 7-Zip uses).
-    /// When set, every file's data is encrypted. Null (the default) writes an unencrypted archive.
+    /// When set, every folder's data is encrypted (one AES stream per solid block). Null (the default) writes an unencrypted archive.
     /// Empty files have no data stream, so they stay unencrypted, as in 7-Zip.
     /// </summary>
     public string? Password { get; set; }

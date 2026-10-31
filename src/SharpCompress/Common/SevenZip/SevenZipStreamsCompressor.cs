@@ -17,6 +17,8 @@ internal sealed class PackedStream
     public CFolder Folder { get; init; } = new();
     public ulong[] Sizes { get; init; } = [];
     public uint?[] CRCs { get; init; } = [];
+    public ulong[]? SubStreamSizes { get; init; }
+    public uint?[]? SubStreamCRCs { get; init; }
 }
 
 /// <summary>
@@ -345,7 +347,14 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
             return properties;
         }
 
-        var remaining = inputStream.Length - inputStream.Position;
+        return ReduceDictionary(inputStream.Length - inputStream.Position, properties);
+    }
+
+    internal static LzmaEncoderProperties ReduceDictionary(
+        long remaining,
+        LzmaEncoderProperties properties
+    )
+    {
         if (remaining >= properties.DictionarySize)
         {
             return properties;
@@ -382,7 +391,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         return properties;
     }
 
-    private static PackedStream BuildPackedStream(
+    internal static PackedStream BuildPackedStream(
         CMethodId methodId,
         byte[] properties,
         ulong compressedSize,
