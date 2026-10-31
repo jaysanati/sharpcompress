@@ -95,6 +95,68 @@ public class SevenZipUpdateTests : TestBase
         }
     }
 
+    [Theory]
+    [InlineData("solid", false)]
+    [InlineData("solid", true)]
+    [InlineData("nonsolid", false)]
+    [InlineData("nonsolid", true)]
+    [InlineData("BCJ2", false)]
+    [InlineData("BCJ2", true)]
+    public async Task SevenZipUpdate_FolderPackedSize(string name, bool asynchronous)
+    {
+        using var source = File.OpenRead(Path.Combine(TEST_ARCHIVES_PATH, $"7Zip.{name}.7z"));
+        var database = Database(source);
+        using var update = await Open(source, asynchronous);
+        var folders = update.Entries.Where(e => e.FolderIndex >= 0).GroupBy(e => e.FolderIndex);
+        Assert.NotEmpty(folders);
+        foreach (var folder in folders)
+        {
+            var expected = database.GetFolderFullPackSize(folder.Key);
+            Assert.True(expected > 0);
+            Assert.All(folder, entry => Assert.Equal(expected, entry.FolderPackedSize));
+        }
+        if (name == "BCJ2")
+        {
+            Assert.Contains(database._folders, folder => folder._packStreams.Count == 4);
+        }
+        Assert.All(
+            update.Entries.Where(e => e.FolderIndex < 0),
+            entry => Assert.Equal(0, entry.FolderPackedSize)
+        );
+
+        // These fixtures have encoded headers. Copy their packed data with an uncompressed
+        // header so NextHeaderOffset counts only file data, excluding packed header bytes.
+        using var output = new MemoryStream();
+        await Write(
+            update,
+            output,
+            asynchronous,
+            new SevenZipWriterOptions { CompressHeader = false }
+        );
+        output.Position = 12;
+        using var reader = new BinaryReader(output, System.Text.Encoding.UTF8, leaveOpen: true);
+        var packedDataSize = checked((long)reader.ReadUInt64());
+        Assert.Equal(packedDataSize, folders.Sum(folder => folder.First().FolderPackedSize));
+        using var copied = await Open(output, asynchronous);
+        Assert.Equal(
+            update.Entries.Select(e => e.FolderPackedSize),
+            copied.Entries.Select(e => e.FolderPackedSize)
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SevenZipUpdate_StreamlessFolderPackedSize(bool asynchronous)
+    {
+        using var source = Create();
+        using var update = await Open(source, asynchronous);
+        var streamless = update.Entries.Where(e => e.FolderIndex < 0).ToArray();
+        Assert.Contains(streamless, entry => entry.IsDirectory);
+        Assert.Contains(streamless, entry => !entry.IsDirectory);
+        Assert.All(streamless, entry => Assert.Equal(0, entry.FolderPackedSize));
+    }
+
     public static IEnumerable<object[]> Archives()
     {
         foreach (
@@ -463,6 +525,7 @@ public class SevenZipUpdateTests : TestBase
         using var update = await Open(source, asynchronous);
         Assert.True(update.Entries[0].IsAnti);
         Assert.All(update.Entries, e => Assert.Equal(-1, e.FolderIndex));
+        Assert.All(update.Entries, e => Assert.Equal(0, e.FolderPackedSize));
         using var output = new MemoryStream();
         await Write(update, output, asynchronous);
         var after = Database(output);

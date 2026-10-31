@@ -1056,6 +1056,7 @@ sources are unsupported. `IsSourceEncrypted` includes encrypted headers.
 exposes `Index`, current `Name`, `IsDirectory`, `IsAnti`, `Size`, nullable `Crc`,
 `CreationTime`, `LastAccessTime`, `ModificationTime`, nullable raw `uint` attributes
 (`Attributes`, including Unix modes), `FolderIndex` (-1 for streamless entries),
+`FolderPackedSize` (total packed bytes of the source folder, or 0 for streamless entries),
 and `IsDeleted`. Edit entries through `Delete(int)`, `Rename(int, string)` and
 `SetMetadata(int, SevenZipWriterEntryOptions)`. Metadata replacement includes all
 three times and attributes; null omits the field. If any entry has attributes,

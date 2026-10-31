@@ -6,7 +6,7 @@ namespace SharpCompress.Writers.SevenZip;
 /// <summary>A source entry in a single-use 7z update. Mutate it through SevenZipUpdate.</summary>
 public sealed class SevenZipUpdateEntry
 {
-    internal SevenZipUpdateEntry(int index, CFileItem file, int folderIndex)
+    internal SevenZipUpdateEntry(int index, CFileItem file, int folderIndex, long folderPackedSize)
     {
         Index = index;
         Name = file.Name;
@@ -15,6 +15,7 @@ public sealed class SevenZipUpdateEntry
         Size = file.Size;
         Crc = file.Crc;
         FolderIndex = file.HasStream ? folderIndex : -1;
+        FolderPackedSize = FolderIndex < 0 ? 0 : folderPackedSize;
         Metadata = new SevenZipWriterEntryOptions
         {
             CreationTime = file.CTime,
@@ -56,6 +57,9 @@ public sealed class SevenZipUpdateEntry
 
     /// <summary>Source folder index, or -1 for entries without streams.</summary>
     public int FolderIndex { get; }
+
+    /// <summary>Total size of all source folder pack streams, or 0 for entries without streams.</summary>
+    public long FolderPackedSize { get; }
 
     /// <summary>Whether the entry will be omitted.</summary>
     public bool IsDeleted { get; internal set; }

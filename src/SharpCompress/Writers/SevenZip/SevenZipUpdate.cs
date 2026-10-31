@@ -36,7 +36,17 @@ public sealed class SevenZipUpdate : IDisposable
         entries = database
             ._files.Select(
                 (file, index) =>
-                    new SevenZipUpdateEntry(index, file, database._fileIndexToFolderIndexMap[index])
+                {
+                    var folderIndex = file.HasStream
+                        ? database._fileIndexToFolderIndexMap[index]
+                        : -1;
+                    return new SevenZipUpdateEntry(
+                        index,
+                        file,
+                        folderIndex,
+                        folderIndex < 0 ? 0 : database.GetFolderFullPackSize(folderIndex)
+                    );
+                }
             )
             .ToArray();
         Entries = Array.AsReadOnly(entries);
