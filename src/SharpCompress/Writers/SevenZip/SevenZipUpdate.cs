@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using SharpCompress.Common;
 using SharpCompress.Common.SevenZip;
+using SharpCompress.Compressors.LZMA;
 using SharpCompress.Compressors.LZMA.Utilities;
 using SharpCompress.IO;
 using SharpCompress.Readers;
@@ -209,7 +210,12 @@ public sealed class SevenZipUpdate : IDisposable
         return false;
     }
 
-    private SevenZipSolidBlockOptions BlockOptions(CFolder folder, SevenZipWriterOptions options)
+    private SevenZipSolidBlockOptions BlockOptions(
+        CFolder folder,
+        SevenZipWriterOptions options,
+        int start,
+        int end
+    )
     {
         var filter = SevenZipFilter.None;
         if (options.CompressionType == CompressionType.LZMA2)
@@ -223,7 +229,58 @@ public sealed class SevenZipUpdate : IDisposable
                 filter = SevenZipFilter.Arm64;
             }
         }
-        return new SevenZipSolidBlockOptions { Filter = filter };
+        long survivors = 0;
+        for (var i = start; i <= end; i++)
+        {
+            if (entries[i].FolderIndex >= 0 && !entries[i].IsDeleted)
+            {
+                survivors += entries[i].Size;
+            }
+        }
+        return new SevenZipSolidBlockOptions
+        {
+            Filter = filter,
+            LzmaProperties = KeepSourceDictionary(folder, options),
+            ExpectedSize = survivors,
+        };
+    }
+
+    // A smaller dictionary than the source's would make a recompressed solid folder grow.
+    // Keep the larger of the two (at most 64 MiB); ExpectedSize then shrinks it to the data.
+    private static LzmaEncoderProperties? KeepSourceDictionary(
+        CFolder folder,
+        SevenZipWriterOptions options
+    )
+    {
+        if (options.CompressionType is not (CompressionType.LZMA or CompressionType.LZMA2))
+        {
+            return options.LzmaProperties;
+        }
+        long source = 0;
+        foreach (var coder in folder._coders)
+        {
+            var props = coder._props;
+            if (coder._methodId._id == CMethodId.K_LZMA2_ID && props is { Length: 1 })
+            {
+                source =
+                    props[0] >= 40 ? uint.MaxValue : (2L | (props[0] & 1)) << (props[0] / 2 + 11);
+            }
+            else if (coder._methodId._id == CMethodId.K_LZMA_ID && props is { Length: >= 5 })
+            {
+                source = BitConverter.ToUInt32(props, 1);
+            }
+        }
+        var current = options.LzmaProperties ?? LzmaEncoderProperties.Default;
+        var dictionary = (int)Math.Min(64L << 20, Math.Max(current.DictionarySize, source));
+        return dictionary == current.DictionarySize
+            ? options.LzmaProperties
+            : new LzmaEncoderProperties(
+                options.CompressionType == CompressionType.LZMA,
+                dictionary,
+                current.NumFastBytes,
+                current.MatchFinder,
+                current.Mode
+            );
     }
 
     private PackedStream CloneFolder(int start, int end)
@@ -322,7 +379,7 @@ public sealed class SevenZipUpdate : IDisposable
                     folder,
                     database.PasswordProvider
                 );
-                writer.BeginSolidBlock(BlockOptions(folder, options));
+                writer.BeginSolidBlock(BlockOptions(folder, options, index, end));
                 for (var i = index; i <= end; i++)
                 {
                     var item = entries[i];
@@ -412,7 +469,7 @@ public sealed class SevenZipUpdate : IDisposable
                     .ConfigureAwait(false);
                 try
                 {
-                    writer.BeginSolidBlock(BlockOptions(folder, options));
+                    writer.BeginSolidBlock(BlockOptions(folder, options, index, end));
                     for (var i = index; i <= end; i++)
                     {
                         var item = entries[i];
