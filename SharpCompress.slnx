@@ -18,6 +18,7 @@
     <Folder Name="/tests/">
         <Project Path="tests/SharpCompress.AotSmoke/SharpCompress.AotSmoke.csproj" />
         <Project Path="tests/SharpCompress.Performance/SharpCompress.Performance.csproj" />
+        <Project Path="tests/SharpCompress.SevenZipGate/SharpCompress.SevenZipGate.csproj" />
         <Project Path="tests/SharpCompress.Test/SharpCompress.Test.csproj" />
     </Folder>
     <Project Path="build/build.csproj" />
