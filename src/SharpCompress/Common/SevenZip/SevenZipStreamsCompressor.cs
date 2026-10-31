@@ -20,10 +20,10 @@ internal sealed class PackedStream
 }
 
 /// <summary>
-/// Compresses a single input stream using LZMA or LZMA2, writing compressed output
+/// Compresses a single input stream using Copy, LZMA or LZMA2, writing packed output
 /// to the archive stream. Builds the CFolder metadata describing the compression.
 /// Uses SharpCompress's existing LzmaStream encoder. With <see cref="SevenZipAesEncryption" />,
-/// the compressed data is also encrypted (LZMA/LZMA2 -> 7zAES), as 7-Zip does.
+/// the compressed data is also encrypted (Copy/LZMA/LZMA2 -> 7zAES), as 7-Zip does.
 /// </summary>
 internal sealed class SevenZipStreamsCompressor(Stream outputStream)
 {
@@ -32,7 +32,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
     /// Returns a PackedStream containing folder metadata, compressed size, and CRCs.
     /// </summary>
     /// <param name="inputStream">Uncompressed data to compress.</param>
-    /// <param name="compressionType">Compression method (LZMA or LZMA2).</param>
+    /// <param name="compressionType">Compression method (None, LZMA or LZMA2).</param>
     /// <param name="encoderProperties">LZMA encoder properties (null for defaults).</param>
     /// <param name="encryption">7zAES settings, or null to store the data unencrypted.</param>
     public PackedStream Compress(
@@ -42,10 +42,6 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         SevenZipAesEncryption? encryption = null
     )
     {
-        var isLzma2 = compressionType == CompressionType.LZMA2;
-        encoderProperties ??= new LzmaEncoderProperties(eos: !isLzma2);
-        encoderProperties = ReduceDictionary(inputStream, encoderProperties);
-
         var outStartOffset = outputStream.Position;
 
         // Wrap the output stream in CRC calculator
@@ -56,6 +52,24 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         using var aesStream = encryption?.CreateEncoder(outCrcStream, out aesProperties);
         Stream codecOutput = aesStream ?? (Stream)outCrcStream;
 
+        if (compressionType == CompressionType.None)
+        {
+            CopyWithCrc(inputStream, codecOutput, out var copyCrc, out var copySize);
+            aesStream?.Finish();
+            return BuildPackedStream(
+                CMethodId.K_COPY,
+                [],
+                (ulong)(outputStream.Position - outStartOffset),
+                (ulong)copySize,
+                copyCrc,
+                outCrcStream.Crc,
+                aesProperties,
+                aesStream?.InputLength
+            );
+        }
+        var isLzma2 = compressionType == CompressionType.LZMA2;
+        encoderProperties ??= new LzmaEncoderProperties(eos: !isLzma2);
+        encoderProperties = ReduceDictionary(inputStream, encoderProperties);
         byte[] properties;
 
         if (isLzma2)
@@ -74,7 +88,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
             properties = lzma2Stream.Properties;
 
             return BuildPackedStream(
-                isLzma2: true,
+                CMethodId.K_LZMA2,
                 properties,
                 (ulong)(outputStream.Position - outStartOffset),
                 (ulong)inputSize2,
@@ -94,7 +108,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         aesStream?.Finish();
 
         return BuildPackedStream(
-            isLzma2: false,
+            CMethodId.K_LZMA,
             properties,
             (ulong)(outputStream.Position - outStartOffset),
             (ulong)inputSize,
@@ -110,7 +124,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
     /// Returns a PackedStream containing folder metadata, compressed size, and CRCs.
     /// </summary>
     /// <param name="inputStream">Uncompressed data to compress.</param>
-    /// <param name="compressionType">Compression method (LZMA or LZMA2).</param>
+    /// <param name="compressionType">Compression method (None, LZMA or LZMA2).</param>
     /// <param name="encoderProperties">LZMA encoder properties (null for defaults).</param>
     /// <param name="encryption">7zAES settings, or null to store the data unencrypted.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -124,10 +138,6 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var isLzma2 = compressionType == CompressionType.LZMA2;
-        encoderProperties ??= new LzmaEncoderProperties(eos: !isLzma2);
-        encoderProperties = ReduceDictionary(inputStream, encoderProperties);
-
         var outStartOffset = outputStream.Position;
 
         // Wrap the output stream in CRC calculator
@@ -138,6 +148,32 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         using var aesStream = encryption?.CreateEncoder(outCrcStream, out aesProperties);
         Stream codecOutput = aesStream ?? (Stream)outCrcStream;
 
+        if (compressionType == CompressionType.None)
+        {
+            var (copyCrc, copySize) = await CopyWithCrcAsync(
+                    inputStream,
+                    codecOutput,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (aesStream is not null)
+            {
+                await aesStream.FinishAsync(cancellationToken).ConfigureAwait(false);
+            }
+            return BuildPackedStream(
+                CMethodId.K_COPY,
+                [],
+                (ulong)(outputStream.Position - outStartOffset),
+                (ulong)copySize,
+                copyCrc,
+                outCrcStream.Crc,
+                aesProperties,
+                aesStream?.InputLength
+            );
+        }
+        var isLzma2 = compressionType == CompressionType.LZMA2;
+        encoderProperties ??= new LzmaEncoderProperties(eos: !isLzma2);
+        encoderProperties = ReduceDictionary(inputStream, encoderProperties);
         byte[] properties;
 
         if (isLzma2)
@@ -168,7 +204,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
             }
 
             return BuildPackedStream(
-                isLzma2: true,
+                CMethodId.K_LZMA2,
                 properties,
                 (ulong)(outputStream.Position - outStartOffset),
                 (ulong)inputSize2,
@@ -200,7 +236,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         }
 
         return BuildPackedStream(
-            isLzma2: false,
+            CMethodId.K_LZMA,
             properties,
             (ulong)(outputStream.Position - outStartOffset),
             (ulong)inputSize,
@@ -350,7 +386,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
     }
 
     private static PackedStream BuildPackedStream(
-        bool isLzma2,
+        CMethodId methodId,
         byte[] properties,
         ulong compressedSize,
         ulong uncompressedSize,
@@ -360,8 +396,6 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         long? codecOutputSize
     )
     {
-        var methodId = isLzma2 ? CMethodId.K_LZMA2 : CMethodId.K_LZMA;
-
         var folder = new CFolder();
         var codec = new CCoderInfo
         {
@@ -380,7 +414,7 @@ internal sealed class SevenZipStreamsCompressor(Stream outputStream)
         else
         {
             // Same layout as 7-Zip: coder 0 is 7zAES and reads the packed stream (in-stream 0);
-            // coder 1 is LZMA/LZMA2, reads coder 0's output (in-stream 1 <- out-stream 0) and
+            // coder 1 is Copy/LZMA/LZMA2, reads coder 0's output (in-stream 1 <- out-stream 0) and
             // produces the file data. Unpack sizes are per out-stream, in coder order; the AES
             // size excludes the CBC padding.
             folder._coders.Add(

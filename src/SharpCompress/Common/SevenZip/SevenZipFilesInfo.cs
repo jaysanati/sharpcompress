@@ -13,6 +13,8 @@ internal sealed class SevenZipWriteEntry
 {
     public string Name { get; init; } = string.Empty;
     public DateTime? ModificationTime { get; init; }
+    public DateTime? CreationTime { get; init; }
+    public DateTime? LastAccessTime { get; init; }
 
     // Define attributes for files too: libarchive misreads partially defined vectors.
     public uint? Attributes { get; init; } = 0x20; // FILE_ATTRIBUTE_ARCHIVE
@@ -52,8 +54,10 @@ internal sealed class SevenZipFilesInfoWriter
         // Names property
         WriteNameProperty(stream);
 
-        // MTime property
-        WriteMTimeProperty(stream);
+        // Times follow the 7z property order: creation, access, modification.
+        WriteTimeProperty(stream, BlockType.CTime);
+        WriteTimeProperty(stream, BlockType.ATime);
+        WriteTimeProperty(stream, BlockType.MTime);
 
         // Attributes property
         WriteAttributesProperty(stream);
@@ -142,12 +146,12 @@ internal sealed class SevenZipFilesInfoWriter
         }
     }
 
-    private void WriteMTimeProperty(Stream stream)
+    private void WriteTimeProperty(Stream stream, BlockType property)
     {
         var definedCount = 0;
         for (var i = 0; i < Entries.Length; i++)
         {
-            if (Entries[i].ModificationTime is not null)
+            if (GetTime(Entries[i], property) is not null)
             {
                 definedCount++;
             }
@@ -160,7 +164,7 @@ internal sealed class SevenZipFilesInfoWriter
 
         WritePropertyHeader(
             stream,
-            BlockType.MTime,
+            property,
             2L
                 + (definedCount == Entries.Length ? 0 : (Entries.LongLength + 7) / 8)
                 + 8L * definedCount
@@ -168,20 +172,29 @@ internal sealed class SevenZipFilesInfoWriter
         stream.WriteByte((byte)(definedCount == Entries.Length ? 1 : 0));
         if (definedCount != Entries.Length)
         {
-            WriteFlags(stream, BlockType.MTime);
+            WriteFlags(stream, property);
         }
         stream.WriteByte(0);
         Span<byte> buf = stackalloc byte[8];
         for (var i = 0; i < Entries.Length; i++)
         {
-            if (Entries[i].ModificationTime is { } mtime)
+            if (GetTime(Entries[i], property) is { } time)
             {
-                var fileTime = (ulong)mtime.ToUniversalTime().ToFileTimeUtc();
+                var fileTime = (ulong)time.ToUniversalTime().ToFileTimeUtc();
                 System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(buf, fileTime);
                 stream.Write(buf);
             }
         }
     }
+
+    private static DateTime? GetTime(SevenZipWriteEntry entry, BlockType property) =>
+        property switch
+        {
+            BlockType.CTime => entry.CreationTime,
+            BlockType.ATime => entry.LastAccessTime,
+            BlockType.MTime => entry.ModificationTime,
+            _ => throw new InvalidOperationException(),
+        };
 
     private void WriteAttributesProperty(Stream stream)
     {
@@ -247,7 +260,8 @@ internal sealed class SevenZipFilesInfoWriter
             {
                 BlockType.EmptyStream => empty,
                 BlockType.EmptyFile => !entry.IsDirectory,
-                BlockType.MTime => entry.ModificationTime is not null,
+                BlockType.CTime or BlockType.ATime or BlockType.MTime => GetTime(entry, property)
+                    is not null,
                 BlockType.WinAttributes => entry.Attributes is not null,
                 _ => throw new InvalidOperationException(),
             };

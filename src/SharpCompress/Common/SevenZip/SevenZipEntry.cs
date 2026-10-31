@@ -50,9 +50,9 @@ public class SevenZipEntry : Entry
 
     public override DateTime? LastModifiedTime => FilePart.Header.MTime;
 
-    public override DateTime? CreatedTime => null;
+    public override DateTime? CreatedTime => FilePart.Header.CTime;
 
-    public override DateTime? LastAccessedTime => null;
+    public override DateTime? LastAccessedTime => FilePart.Header.ATime;
 
     public override DateTime? ArchivedTime => null;
 

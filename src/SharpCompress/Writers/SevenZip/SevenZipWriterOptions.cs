@@ -15,17 +15,21 @@ public sealed record SevenZipWriterOptions : IWriterOptions
     private int _compressionLevel;
 
     /// <summary>
-    /// The compression type to use. Supported: LZMA and LZMA2 (default).
+    /// The compression type to use. Supported: None (Copy), LZMA and LZMA2 (default).
     /// </summary>
     public CompressionType CompressionType
     {
         get => _compressionType;
         set
         {
-            if (value != CompressionType.LZMA && value != CompressionType.LZMA2)
+            if (
+                value != CompressionType.None
+                && value != CompressionType.LZMA
+                && value != CompressionType.LZMA2
+            )
             {
                 throw new ArgumentException(
-                    $"SevenZipWriter only supports CompressionType.LZMA and CompressionType.LZMA2. Got: {value}",
+                    $"SevenZipWriter only supports CompressionType.None, CompressionType.LZMA and CompressionType.LZMA2. Got: {value}",
                     nameof(value)
                 );
             }

@@ -371,6 +371,38 @@ using Stream source = File.OpenRead("input.txt");
 writer.Write("input.txt", source, DateTime.UtcNow);
 ```
 
+### Store 7z files with per-entry metadata
+
+```csharp
+using var output = File.Create("stored.7z");
+await using var writer = new SevenZipWriter(
+    output,
+    new SevenZipWriterOptions(CompressionType.None)
+    {
+        Password = "example password",
+        EncryptHeader = true,
+    });
+using var source = File.OpenRead("input.txt");
+await writer.WriteAsync(
+    "input.txt",
+    source,
+    new SevenZipWriterEntryOptions
+    {
+        CreationTime = File.GetCreationTimeUtc("input.txt"),
+        LastAccessTime = File.GetLastAccessTimeUtc("input.txt"),
+        ModificationTime = File.GetLastWriteTimeUtc("input.txt"),
+        Attributes = 0x81A48000, // Unix regular file, mode 0644.
+    },
+    CancellationToken.None);
+await writer.WriteDirectoryAsync(
+    "directory",
+    new SevenZipWriterEntryOptions { Attributes = 0x41ED8000 }, // Unix directory, mode 0755.
+    CancellationToken.None);
+```
+
+Use `Write` and `WriteDirectory` with the same entry options for synchronous writing.
+Omit `Password` and `EncryptHeader` for an unencrypted archive.
+
 ### Extract zip which has non-utf8 encoded filename(cp932)
 
 ```C#

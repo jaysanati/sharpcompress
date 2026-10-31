@@ -520,6 +520,33 @@ archive.SaveTo("output.zip", options);
 
 `WriterOptions.EnableParallelism` (also available on `ZipWriterOptions`, `TarWriterOptions`, `GZipWriterOptions`, and `SevenZipWriterOptions`) opts in to a format's optional parallel encode. No writer currently implements parallel encoding, so this is a no-op today; it is reserved for future use and mirrors `ReaderOptions.EnableParallelism`.
 
+### 7z entry metadata and Store
+
+`SevenZipWriterOptions.CompressionType` accepts `None` (Store using the Copy coder),
+`LZMA`, or `LZMA2` (default). All three support `Password` encryption. `EncryptHeader`
+requires a password and always uses LZMA for the header.
+
+`SevenZipWriterEntryOptions` is a mutable value type with nullable `DateTime`
+properties `CreationTime`, `LastAccessTime`, and `ModificationTime` (UTC), and nullable
+`uint Attributes`. Use it with `SevenZipWriter.Write(string, Stream, SevenZipWriterEntryOptions)`
+or `WriteDirectory(string, SevenZipWriterEntryOptions)`. Their `WriteAsync` and
+`WriteDirectoryAsync` twins additionally accept an optional `CancellationToken`.
+
+Null times are omitted. Attributes pass through unchanged, except that directories
+always have `0x10` ORed in and files without attributes get `0x20` (archive), so the
+attribute vector stays fully defined. Windows attributes occupy the low 16 bits. With
+bit `0x8000` set, the high 16 bits hold the Unix mode, for example `0x81A48000` for a
+regular file with mode 0644. `SevenZipArchive` exposes the times as `CreatedTime`,
+`LastAccessedTime`, and `LastModifiedTime`. `Attrib` is unchanged (the Windows
+attributes); `SevenZipEntry.ExtendedAttrib` exposes the raw 32-bit value as a signed
+`int?` (use `unchecked((uint)entry.ExtendedAttrib.Value)` for the unsigned value).
+
+Read times retain the reader's local-time convention; use ToUniversalTime() to compare them with UTC input.
+
+The existing nullable modification-time overloads retain their default file attribute
+`0x20` and directory attribute `0x10`, and their existing output. The value type keeps
+calls with a literal `null` bound to those overloads.
+
 ### Extraction behavior
 
 `ZipArchiveEntry.OpenEntryStreamAsync` and `TarArchiveEntry.OpenEntryStreamAsync` are virtual and support newly added writable entries as well as entries read from an archive. Opening a new writable entry checks cancellation, rewinds its supplied stream, and returns a non-owning wrapper. Disposing that wrapper leaves the supplied stream open; archive disposal follows the entry's `closeStream` setting.

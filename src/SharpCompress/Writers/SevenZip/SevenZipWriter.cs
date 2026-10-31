@@ -109,7 +109,19 @@ public partial class SevenZipWriter : AbstractWriter
     /// <summary>
     /// Writes a file entry to the archive.
     /// </summary>
-    public override void Write(string filename, Stream source, DateTime? modificationTime)
+    public override void Write(string filename, Stream source, DateTime? modificationTime) =>
+        Write(
+            filename,
+            source,
+            new SevenZipWriterEntryOptions
+            {
+                ModificationTime = modificationTime,
+                Attributes = 0x20,
+            }
+        );
+
+    /// <summary>Writes a file entry with the specified metadata.</summary>
+    public void Write(string filename, Stream source, SevenZipWriterEntryOptions options)
     {
         if (finalized)
         {
@@ -133,7 +145,10 @@ public partial class SevenZipWriter : AbstractWriter
                 new SevenZipWriteEntry
                 {
                     Name = filename,
-                    ModificationTime = modificationTime,
+                    ModificationTime = options.ModificationTime,
+                    CreationTime = options.CreationTime,
+                    LastAccessTime = options.LastAccessTime,
+                    Attributes = options.Attributes ?? 0x20, // FILE_ATTRIBUTE_ARCHIVE keeps the vector fully defined
                     IsDirectory = false,
                     IsEmpty = true,
                 }
@@ -170,7 +185,10 @@ public partial class SevenZipWriter : AbstractWriter
             new SevenZipWriteEntry
             {
                 Name = filename,
-                ModificationTime = modificationTime,
+                ModificationTime = options.ModificationTime,
+                CreationTime = options.CreationTime,
+                LastAccessTime = options.LastAccessTime,
+                Attributes = options.Attributes ?? 0x20, // FILE_ATTRIBUTE_ARCHIVE keeps the vector fully defined
                 IsDirectory = false,
                 IsEmpty = isEmpty || actuallyEmpty,
             }
@@ -180,7 +198,14 @@ public partial class SevenZipWriter : AbstractWriter
     /// <summary>
     /// Writes a directory entry to the archive.
     /// </summary>
-    public override void WriteDirectory(string directoryName, DateTime? modificationTime)
+    public override void WriteDirectory(string directoryName, DateTime? modificationTime) =>
+        WriteDirectory(
+            directoryName,
+            new SevenZipWriterEntryOptions { ModificationTime = modificationTime }
+        );
+
+    /// <summary>Writes a directory entry with the specified metadata.</summary>
+    public void WriteDirectory(string directoryName, SevenZipWriterEntryOptions options)
     {
         if (finalized)
         {
@@ -197,10 +222,13 @@ public partial class SevenZipWriter : AbstractWriter
             new SevenZipWriteEntry
             {
                 Name = directoryName,
-                ModificationTime = modificationTime,
+                ModificationTime = options.ModificationTime,
+                CreationTime = options.CreationTime,
+                LastAccessTime = options.LastAccessTime,
+
                 IsDirectory = true,
                 IsEmpty = true,
-                Attributes = 0x10, // FILE_ATTRIBUTE_DIRECTORY
+                Attributes = (options.Attributes ?? 0) | 0x10, // FILE_ATTRIBUTE_DIRECTORY
             }
         );
     }

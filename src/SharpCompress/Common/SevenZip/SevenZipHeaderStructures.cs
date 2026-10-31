@@ -188,7 +188,8 @@ internal sealed class SevenZipUnPackInfoWriter
 
     private static void WriteCoder(Stream stream, CCoderInfo coder)
     {
-        var codecIdLength = coder._methodId.GetLength();
+        // Copy has ID zero, which still occupies one byte on the wire.
+        var codecIdLength = System.Math.Max(1, coder._methodId.GetLength());
         byte attributes = (byte)(codecIdLength & 0x0F);
 
         var isComplex = coder._numInStreams != 1 || coder._numOutStreams != 1;

@@ -161,10 +161,28 @@ public partial class SevenZipWriter
     /// <summary>
     /// Asynchronously writes a file entry to the 7z archive.
     /// </summary>
-    public override async ValueTask WriteAsync(
+    public override ValueTask WriteAsync(
         string filename,
         Stream source,
         DateTime? modificationTime,
+        CancellationToken cancellationToken = default
+    ) =>
+        WriteAsync(
+            filename,
+            source,
+            new SevenZipWriterEntryOptions
+            {
+                ModificationTime = modificationTime,
+                Attributes = 0x20,
+            },
+            cancellationToken
+        );
+
+    /// <summary>Writes a file entry asynchronously with the specified metadata.</summary>
+    public async ValueTask WriteAsync(
+        string filename,
+        Stream source,
+        SevenZipWriterEntryOptions options,
         CancellationToken cancellationToken = default
     )
     {
@@ -190,7 +208,10 @@ public partial class SevenZipWriter
                 new SevenZipWriteEntry
                 {
                     Name = filename,
-                    ModificationTime = modificationTime,
+                    ModificationTime = options.ModificationTime,
+                    CreationTime = options.CreationTime,
+                    LastAccessTime = options.LastAccessTime,
+                    Attributes = options.Attributes ?? 0x20, // FILE_ATTRIBUTE_ARCHIVE keeps the vector fully defined
                     IsDirectory = false,
                     IsEmpty = true,
                 }
@@ -226,7 +247,10 @@ public partial class SevenZipWriter
             new SevenZipWriteEntry
             {
                 Name = filename,
-                ModificationTime = modificationTime,
+                ModificationTime = options.ModificationTime,
+                CreationTime = options.CreationTime,
+                LastAccessTime = options.LastAccessTime,
+                Attributes = options.Attributes ?? 0x20, // FILE_ATTRIBUTE_ARCHIVE keeps the vector fully defined
                 IsDirectory = false,
                 IsEmpty = isEmpty || actuallyEmpty,
             }
@@ -240,10 +264,22 @@ public partial class SevenZipWriter
         string directoryName,
         DateTime? modificationTime,
         CancellationToken cancellationToken = default
+    ) =>
+        WriteDirectoryAsync(
+            directoryName,
+            new SevenZipWriterEntryOptions { ModificationTime = modificationTime },
+            cancellationToken
+        );
+
+    /// <summary>Writes a directory entry asynchronously with the specified metadata.</summary>
+    public ValueTask WriteDirectoryAsync(
+        string directoryName,
+        SevenZipWriterEntryOptions options,
+        CancellationToken cancellationToken = default
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        WriteDirectory(directoryName, modificationTime);
+        WriteDirectory(directoryName, options);
         return new ValueTask();
     }
 }
