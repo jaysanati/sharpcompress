@@ -58,7 +58,7 @@ internal static class ManagedCompression
         }
         else
         {
-            if (engine is not ("sc-lzma-1t" or "sc-enci-today"))
+            if (engine is not ("sc-lzma-1t" or "sc-lzma2-1t" or "sc-enci-today"))
             {
                 throw new ArgumentException("Unknown managed engine.");
             }
@@ -67,13 +67,15 @@ internal static class ManagedCompression
             using (
                 var writer = new SevenZipWriter(
                     output,
-                    new SevenZipWriterOptions(CompressionType.LZMA)
+                    new SevenZipWriterOptions(
+                        engine == "sc-lzma2-1t" ? CompressionType.LZMA2 : CompressionType.LZMA
+                    )
                     {
                         LzmaProperties =
                             engine == "sc-enci-today"
                                 ? null
                                 : new LzmaEncoderProperties(
-                                    true,
+                                    engine != "sc-lzma2-1t",
                                     options.Dictionary,
                                     options.FastBytes
                                 ),

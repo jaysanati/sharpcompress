@@ -77,7 +77,12 @@ internal sealed partial class Runner(Options options, CancellationToken cancella
                             : "";
                     try
                     {
-                        var single = engine is "7z-lzma-1t" or "sc-lzma-1t" or "sc-enci-today";
+                        var single =
+                            engine
+                            is "7z-lzma-1t"
+                                or "sc-lzma-1t"
+                                or "sc-lzma2-1t"
+                                or "sc-enci-today";
                         try
                         {
                             if (engine.StartsWith("7z-", StringComparison.Ordinal))
@@ -415,12 +420,17 @@ internal sealed partial class Runner(Options options, CancellationToken cancella
         );
         _ = text.AppendLine($"OS: {RuntimeInformation.OSDescription}");
         _ = text.AppendLine($"Runtime: {RuntimeInformation.FrameworkDescription}");
-        _ = text.AppendLine($"Execution: {(RuntimeFeature.IsDynamicCodeSupported ? "JIT" : "AOT")}");
+        _ = text.AppendLine(
+            $"Execution: {(RuntimeFeature.IsDynamicCodeSupported ? "JIT" : "AOT")}"
+        );
         _ = text.AppendLine($"Pin mask: 0x{options.PinMask:X}");
         _ = text.AppendLine(
             "7-Zip: "
                 + Require(processes.Execute(options.SevenZip, [], false))
-                    .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Split(
+                        '\n',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    )
                     .FirstOrDefault()
         );
         try

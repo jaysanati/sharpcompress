@@ -454,6 +454,81 @@ public class BufferPoolLifetimeTests
         await AssertWritesRejected(encoder);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Lzma2Encoder_FailedWrite_ReturnsBuffers(bool useAsync)
+    {
+        var pool = new TrackingPool<byte>();
+        using var output = new ThrowingOutputStream();
+        var encoder = new Lzma2EncoderStream(output, 1 << 16, 32, pool);
+        var data = new byte[1 << 21];
+        new Random(321).NextBytes(data);
+        if (useAsync)
+        {
+            await Assert.ThrowsAsync<IOException>(() =>
+                encoder.WriteAsync(data, 0, data.Length, CancellationToken.None)
+            );
+            await encoder.DisposeAsync();
+        }
+        else
+        {
+            Assert.Throws<IOException>(() => encoder.Write(data, 0, data.Length));
+            encoder.Dispose();
+        }
+        encoder.Dispose();
+        Assert.Equal(1, pool.ReturnCount);
+        Assert.Empty(pool.Active);
+        Assert.True(output.CanWrite);
+    }
+
+    [Fact]
+    public async Task Lzma2Encoder_CancelledChunkWrite_ReturnsBuffers()
+    {
+        var pool = new TrackingPool<byte>();
+        using var cancellation = new CancellationTokenSource();
+        using var output = new CancellingLzma2Output(cancellation);
+        var encoder = new Lzma2EncoderStream(output, 1 << 16, 32, pool);
+        var data = new byte[1 << 21];
+        new Random(321).NextBytes(data);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            encoder.WriteAsync(data, 0, data.Length, cancellation.Token)
+        );
+        await encoder.DisposeAsync();
+        encoder.Dispose();
+        Assert.Equal(1, pool.ReturnCount);
+        Assert.Empty(pool.Active);
+        Assert.Equal(1, output.Writes);
+        Assert.True(output.CanWrite);
+    }
+
+    private sealed class CancellingLzma2Output(CancellationTokenSource cancellation) : MemoryStream
+    {
+        public int Writes { get; private set; }
+
+        public override Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken
+        )
+        {
+            Writes++;
+            cancellation.Cancel();
+            return Task.FromCanceled(cancellationToken);
+        }
+
+#if !LEGACY_DOTNET
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default
+        )
+        {
+            return new ValueTask(WriteAsync(Array.Empty<byte>(), 0, 0, cancellationToken));
+        }
+#endif
+    }
+
     private static async Task AssertWritesRejected(Lzma2EncoderStream encoder)
     {
         Assert.False(encoder.CanWrite);

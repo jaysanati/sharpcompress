@@ -11,7 +11,7 @@ using SharpCompress.Compressors.LZMA.RangeCoder;
 
 namespace SharpCompress.Compressors.LZMA;
 
-internal class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDisposable
+internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDisposable
 {
     private enum EMatchFinderType
     {
@@ -610,6 +610,9 @@ internal class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDi
             ArrayPool<Optimal>.Shared.Return(_optimum);
             _optimum = null;
         }
+        _lzma2Input = null;
+        _lzma2Output = null;
+        _lzma2ChunkCompleted = null;
         _literalEncoder.Dispose();
         _matchFinder?.Dispose();
         _matchFinder = null;
@@ -1443,6 +1446,12 @@ internal class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDi
 
     private void Flush(uint nowPos)
     {
+        if (_lzma2ChunkCompleted is not null)
+        {
+            CompleteLzma2Chunk();
+            ReleaseMfStream();
+            return;
+        }
         ReleaseMfStream();
         WriteEndMarker(nowPos & _posStateMask);
         _rangeEncoder.FlushData();
@@ -1517,6 +1526,7 @@ internal class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDi
             _literalEncoder
                 .GetSubCoder((uint)(_nowPos64), _previousByte)
                 .Encode(_rangeEncoder, curByte);
+            CaptureLzma2Input(1);
             _previousByte = curByte;
             _additionalOffset--;
             _nowPos64++;
@@ -1665,8 +1675,10 @@ internal class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDi
                 }
                 _previousByte = _matchFinder.GetIndexByte((int)(len - 1 - _additionalOffset));
             }
+            CaptureLzma2Input(len);
             _additionalOffset -= len;
             _nowPos64 += len;
+            CheckLzma2Chunk();
             if (_additionalOffset == 0)
             {
                 // if (!_fastMode)
@@ -2056,7 +2068,7 @@ internal class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDi
         }
     }
 
-    public long Code(Stream inStream, bool final)
+    public long Code(Stream inStream, bool final, CancellationToken cancellationToken = default)
     {
         _matchFinder.SetStream(inStream);
         _processingMode = !final;
@@ -2064,6 +2076,7 @@ internal class Encoder : ICoder, ISetCoderProperties, IWriteCoderProperties, IDi
         {
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 CodeOneBlock(out var processedInSize, out var processedOutSize, out var finished);
                 if (finished)
                 {

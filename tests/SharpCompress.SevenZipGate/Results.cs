@@ -62,7 +62,7 @@ internal sealed class Results(Options options)
             managed ? "BT4"
             : level == 1 ? "HC4"
             : "BT4",
-            engine is "7z-lzma-1t" or "sc-lzma-1t" or "sc-enci-today"
+            engine is "7z-lzma-1t" or "sc-lzma-1t" or "sc-lzma2-1t" or "sc-enci-today"
                 ? 1
                 : Environment.ProcessorCount,
             measurement.Wall,
@@ -112,7 +112,7 @@ internal sealed class Results(Options options)
             _ = text.AppendLine();
         }
         _ = text.AppendLine(
-            "## Gate\n\nOnly successful, verified archive runs (or successful parallel estimates) are compared; latest successful row wins. Size difference is (SC / 7-Zip - 1) × 100%.\n\n| Dataset | Level | SC / 7z LZMA wall | SC parallel / 7z LZMA2 wall | SC size difference |\n|---|---:|---:|---:|---:|"
+            "## Gate\n\nOnly successful, verified archive runs (or successful parallel estimates) are compared; latest successful row wins. Size difference is (SC / 7-Zip - 1) × 100%.\n\n| Dataset | Level | SC / 7z LZMA wall | SC LZMA2 / 7z LZMA wall | SC parallel / 7z LZMA2 wall | SC size difference |\n|---|---:|---:|---:|---:|---:|"
         );
         foreach (var dataset in rows.Select(r => r[1]).Distinct(StringComparer.Ordinal))
         {
@@ -126,7 +126,7 @@ internal sealed class Results(Options options)
                 var sc = Last("sc-lzma-1t");
                 var native = Last("7z-lzma-1t");
                 _ = text.AppendLine(
-                    $"| {dataset} | {level} | {Compare(sc, native, 10, false)} | {Compare(Last("sc-lzma-par"), Last("7z-lzma2-mt"), 10, false)} | {Compare(sc, native, 13, true)} |"
+                    $"| {dataset} | {level} | {Compare(sc, native, 10, false)} | {Compare(Last("sc-lzma2-1t"), native, 10, false)} | {Compare(Last("sc-lzma-par"), Last("7z-lzma2-mt"), 10, false)} | {Compare(sc, native, 13, true)} |"
                 );
             }
         }

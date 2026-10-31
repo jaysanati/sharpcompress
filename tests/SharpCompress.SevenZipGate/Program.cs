@@ -14,6 +14,7 @@ internal static class Program
         "7z-lzma2-mt",
         "7z-default",
         "sc-lzma-1t",
+        "sc-lzma2-1t",
         "sc-lzma-par",
     ];
 
@@ -140,9 +141,10 @@ internal sealed class Options
                     result.Engines = value.Split(',').ToHashSet(StringComparer.Ordinal);
                     break;
                 case "--level":
-                    result.Levels = [.. value
-                        .Split(',')
-                        .Select(s => int.Parse(s, CultureInfo.InvariantCulture))];
+                    result.Levels =
+                    [
+                        .. value.Split(',').Select(s => int.Parse(s, CultureInfo.InvariantCulture)),
+                    ];
                     break;
                 case "--dictionary":
                     result.Dictionary = int.Parse(value, CultureInfo.InvariantCulture);
@@ -295,9 +297,11 @@ internal static class Paths
     }
 
     public static string[] InputFiles(Options options, string dataset) =>
-        [.. Files(options.At("data", dataset))
-            .OrderBy(
-                p => Path.GetRelativePath(options.At("data", dataset), p),
-                StringComparer.Ordinal
-            )];
+        [
+            .. Files(options.At("data", dataset))
+                .OrderBy(
+                    p => Path.GetRelativePath(options.At("data", dataset), p),
+                    StringComparer.Ordinal
+                ),
+        ];
 }

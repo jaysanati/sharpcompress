@@ -473,7 +473,7 @@ public class SevenZipArchiveTests : ArchiveTests
 
 #if !LEGACY_DOTNET
     [Fact]
-    public void SevenZipArchive_EnableParallelism_OptInEngagesParallelDecodePath()
+    public void SevenZipArchive_EnableParallelism_ContinuousDictionaryFallsBackToSequentialDecode()
     {
         var archivePath = Path.Combine(SCRATCH_FILES_PATH, "parallel-decode-optin.7z");
         var payload = CreateParallelDecodeTestArchive(archivePath);
@@ -498,7 +498,7 @@ public class SevenZipArchiveTests : ArchiveTests
                 out var parallelFolderStreamType
             )
         );
-        Assert.Equal(typeof(FileStream), parallelFolderStreamType);
+        Assert.Equal(typeof(LzmaStream), parallelFolderStreamType);
     }
 
     [Fact]
@@ -532,9 +532,9 @@ public class SevenZipArchiveTests : ArchiveTests
 
     private static byte[] CreateParallelDecodeTestArchive(string archivePath)
     {
-        // Highly repetitive so it compresses well, and large enough that -- combined with the
-        // small dictionary below -- the encoder is forced to periodically reset the dictionary,
-        // producing multiple independently-decodable LZMA2 restart blocks.
+        // Multiple chunks share one dictionary, even when the input exceeds its size.
+        // Opting into parallel decoding must preserve the sequential fallback for
+        // a stream without independently decodable dictionary-reset blocks.
         var payload = new byte[20_000_000];
         for (var i = 0; i < payload.Length; i++)
         {

@@ -14,7 +14,7 @@ SharpCompress.SevenZipGate.exe prepare --root C:\7zSandbox
 SharpCompress.SevenZipGate.exe run --root C:\7zSandbox
 ```
 
-`prepare` reads the fixed source locations in the spec. It skips datasets with completed manifests. `smoke` requires an explicitly supplied empty directory, generates its own input, and runs all five engines at level 1 plus the default-properties baseline at level 0. It never reads the preparation sources. The caller removes the smoke directory after inspecting its results.
+`prepare` reads the fixed source locations in the spec. It skips datasets with completed manifests. `smoke` requires an explicitly supplied empty directory, generates its own input, and runs all six engines at level 1 plus the default-properties baseline at level 0. It never reads the preparation sources. The caller removes the smoke directory after inspecting its results.
 
 Options:
 
@@ -34,3 +34,4 @@ for the AOT publish.
 Create `<root>/STOP` or press Ctrl+C to stop. Remove STOP before resuming. Output paths reject junctions and symlinks. Keep the root exclusively owned by the harness while it is running. All commands preserve a 30 GiB free-space reserve, including smoke. An existing nonempty `out` directory requires inspection before a run; the harness cleans its own output after each test.
 
 `results/results.csv` is the resumable invariant-culture record. `results.md` includes per-dataset and gate comparison tables. `environment.txt` records probed LZMA dictionaries, runtime, hardware, and native settings. `run.log` records child command lines and output. Dictionary columns describe configured maxima; SharpCompress reduces them for each known input size. Native LZMA2/default settings are controlled by 7-Zip. The parallel estimate omits archive/header overhead and records verification as `n/a`. Native timeout progress is unavailable and remains zero; managed children report bytes read once per second.
+`sc-lzma2-1t` runs immediately after `sc-lzma-1t`, using LZMA2 with the same probed dictionary and fast-byte settings. Both are single-threaded, pinned to `--pin-mask`, and their archives are verified with `7z t`. The Gate table reports `SC LZMA2 / 7z LZMA wall` alongside the existing comparisons.

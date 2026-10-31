@@ -80,6 +80,9 @@ internal partial class Encoder
         }
     }
 
+    // Includes delayed carry bytes and the final range-coder flush.
+    internal long PendingSize => _cacheSize + 5L;
+
     public long GetProcessedSizeAdd() => -1;
 }
 

@@ -226,28 +226,15 @@ public class LzmaScratchTests
                 encoder.Write(expected, 0, expected.Length);
             }
         }
-        var trial = encoder
+        var core = encoder
             .GetType()
-            .GetField("_trialDecoder", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetField("_encoder", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(encoder)!;
-        var literals = trial
-            .GetType()
-            .GetField("_literalDecoder", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(trial)!;
         Assert.Null(
-            literals
-                .GetType()
-                .GetField("_models", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(literals)
+            core.GetType()
+                .GetField("_optimum", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(core)
         );
-#if !LEGACY_DOTNET
-        Assert.Null(
-            trial
-                .GetType()
-                .GetField("_fLiteral", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(trial)
-        );
-#endif
         packed.Position = 0;
         using var decoder = LzmaStream.Create(
             properties,
