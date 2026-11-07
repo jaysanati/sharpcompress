@@ -6,6 +6,9 @@ namespace SharpCompress;
 
 internal static class StringExtensions
 {
+    internal static bool StartsWith(this string text, char value) =>
+        text.Length > 0 && text[0] == value;
+
     internal static bool EndsWith(this string text, char value) =>
         text.Length > 0 && text[text.Length - 1] == value;
 
