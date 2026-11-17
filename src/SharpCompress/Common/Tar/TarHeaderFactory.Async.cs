@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -53,7 +54,8 @@ internal static partial class TarHeaderFactory
                     }
                 }
             }
-            catch
+            catch (Exception ex)
+                when (ex is not OperationCanceledException && ex is not InvalidFormatException)
             {
                 header = null;
             }

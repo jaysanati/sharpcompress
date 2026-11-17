@@ -31,6 +31,8 @@ internal sealed partial class TarHeader
     internal long UserId { get; set; }
     internal long GroupId { get; set; }
     internal long Size { get; set; }
+    internal long DeviceMajor { get; set; }
+    internal long DeviceMinor { get; set; }
     internal DateTime LastModifiedTime { get; set; }
     internal EntryType EntryType { get; set; }
     internal Stream? PackedStream { get; set; }
@@ -313,6 +315,14 @@ internal sealed partial class TarHeader
                 return false;
             }
 
+            if (!ValidateHeader(buffer))
+            {
+                // Preserve the empty-header state used by TAR format detection.
+                Name = string.Empty;
+                Size = 0;
+                EntryType = EntryType.File;
+                return false;
+            }
             entryType = ReadEntryType(buffer);
 
             // LongName and LongLink headers can follow each other and need
@@ -345,12 +355,6 @@ internal sealed partial class TarHeader
             break;
         }
 
-        // Check header checksum
-        if (!checkChecksum(buffer))
-        {
-            return false;
-        }
-
         Name = ArchiveEncoding.Decode(buffer, 0, 100).TrimNulls();
         EntryType = entryType;
         Size = ReadSize(buffer);
@@ -362,18 +366,20 @@ internal sealed partial class TarHeader
             LinkName = ArchiveEncoding.Decode(buffer, 157, 100).TrimNulls();
         }
 
-        Mode = ReadAsciiInt64Base8(buffer, 100, 7);
-        UserId = ReadAsciiInt64Base8oldGnu(buffer, 108, 7);
-        GroupId = ReadAsciiInt64Base8oldGnu(buffer, 116, 7);
+        Mode = ReadNumberOrZero(buffer, 100, 8);
+        UserId = ReadNumberOrZero(buffer, 108, 8);
+        GroupId = ReadNumberOrZero(buffer, 116, 8);
 
-        var unixTimeStamp = ReadAsciiInt64Base8(buffer, 136, 11);
+        DeviceMajor = ReadNumber(buffer, 329, 8);
+        DeviceMinor = ReadNumber(buffer, 337, 8);
 
-        LastModifiedTime = EPOCH.AddSeconds(unixTimeStamp).ToLocalTime();
+        LastModifiedTime = ReadModificationTime(buffer);
         Magic = ArchiveEncoding.Decode(buffer, 257, 6).TrimNulls();
 
-        if (!string.IsNullOrEmpty(Magic) && "ustar".Equals(Magic, StringComparison.Ordinal))
+        // GNU magic is "ustar ": its prefix area contains other metadata.
+        if (buffer.AsSpan(257, 6).SequenceEqual("ustar\0"u8))
         {
-            var namePrefix = ArchiveEncoding.Decode(buffer, 345, 157).TrimNulls();
+            var namePrefix = ArchiveEncoding.Decode(buffer, 345, 155).TrimNulls();
 
             if (!string.IsNullOrEmpty(namePrefix))
             {
@@ -388,9 +394,9 @@ internal sealed partial class TarHeader
             Mode |= 0b1_000_000_000;
         }
 
-        if (entryType != EntryType.LongName && Name.Length == 0)
+        if (Name.Length == 0)
         {
-            return false;
+            throw new InvalidFormatException("TAR header has an empty name.");
         }
 
         return true;
@@ -632,14 +638,108 @@ internal sealed partial class TarHeader
 
     private static EntryType ReadEntryType(byte[] buffer) => (EntryType)buffer[156];
 
-    private long ReadSize(byte[] buffer)
+    private static bool ValidateHeader(byte[] buffer)
     {
-        if ((buffer[124] & 0x80) == 0x80) // if size in binary
+        // Only an all-zero block is an end marker. A corrupt non-zero header
+        // must not turn into a successful end of archive, even for metadata records.
+        var isEmpty = true;
+        for (var i = 0; i < BLOCK_SIZE; i++)
         {
-            return BinaryPrimitives.ReadInt64BigEndian(buffer.AsSpan(0x80));
+            if (buffer[i] != 0)
+            {
+                isEmpty = false;
+                break;
+            }
         }
+        if (isEmpty)
+        {
+            return false;
+        }
+        try
+        {
+            if (!checkChecksum(buffer))
+            {
+                throw new InvalidFormatException("Invalid TAR header checksum.");
+            }
+        }
+        catch (Exception ex)
+            when (ex is FormatException || ex is OverflowException || ex is ArgumentException)
+        {
+            throw new InvalidFormatException("Invalid TAR header checksum.", ex);
+        }
+        return true;
+    }
 
-        return ReadAsciiInt64Base8(buffer, 124, 11);
+    private static long ReadNumber(byte[] buffer, int offset, int count)
+    {
+        if (!TryReadNumber(buffer, offset, count, out var value))
+        {
+            throw new InvalidFormatException($"Invalid TAR numeric field at offset {offset}.");
+        }
+        return value;
+    }
+
+    private static long ReadSize(byte[] buffer)
+    {
+        if (!TryReadNumber(buffer, 124, 12, out var size) || size < 0)
+        {
+            throw new InvalidFormatException("Invalid TAR size field.");
+        }
+        return size;
+    }
+
+    private static long ReadNumberOrZero(byte[] buffer, int offset, int count) =>
+        TryReadNumber(buffer, offset, count, out var value) ? value : 0;
+
+    private static DateTime ReadModificationTime(byte[] buffer)
+    {
+        var seconds = ReadNumberOrZero(buffer, 136, 12);
+        try
+        {
+            return EPOCH.AddSeconds(seconds).ToLocalTime();
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // Metadata outside DateTime's range must not prevent reading file data.
+            return EPOCH.ToLocalTime();
+        }
+    }
+
+    private static bool TryReadNumber(byte[] buffer, int offset, int count, out long value)
+    {
+        value = 0;
+        try
+        {
+            if ((buffer[offset] & 0x80) != 0)
+            {
+                // The marker bit is not part of the signed, big-endian value.
+                // Sign extension also handles GNU's 0xff negative-value marker.
+                value = buffer[offset] & 0x7f;
+                if ((value & 0x40) != 0)
+                {
+                    value -= 0x80;
+                }
+                for (var i = 1; i < count; i++)
+                {
+                    value = checked(value * 256 + buffer[offset + i]);
+                }
+            }
+            else
+            {
+                var text = Encoding
+                    .ASCII.GetString(buffer, offset, count)
+                    .Replace('\0', ' ')
+                    .Trim();
+                value = text.Length == 0 ? 0 : Convert.ToInt64(text, 8);
+            }
+            return true;
+        }
+        catch (Exception ex)
+            when (ex is FormatException || ex is OverflowException || ex is ArgumentException)
+        {
+            value = 0;
+            return false;
+        }
     }
 
     private static byte[] ReadBlock(BinaryReader reader)
@@ -703,7 +803,7 @@ internal sealed partial class TarHeader
 
     private static int ReadAsciiInt32Base8(byte[] buffer, int offset, int count)
     {
-        var s = Encoding.UTF8.GetString(buffer, offset, count).TrimNulls();
+        var s = Encoding.UTF8.GetString(buffer, offset, count).Replace('\0', ' ').Trim();
         if (string.IsNullOrEmpty(s))
         {
             return 0;
@@ -713,25 +813,7 @@ internal sealed partial class TarHeader
 
     private static long ReadAsciiInt64Base8(byte[] buffer, int offset, int count)
     {
-        var s = Encoding.UTF8.GetString(buffer, offset, count).TrimNulls();
-        if (string.IsNullOrEmpty(s))
-        {
-            return 0;
-        }
-        return Convert.ToInt64(s, 8);
-    }
-
-    private static long ReadAsciiInt64Base8oldGnu(byte[] buffer, int offset, int count)
-    {
-        if (buffer[offset] == 0x80 && buffer[offset + 1] == 0x00)
-        {
-            return buffer[offset + 4] << 24
-                | buffer[offset + 5] << 16
-                | buffer[offset + 6] << 8
-                | buffer[offset + 7];
-        }
-        var s = Encoding.UTF8.GetString(buffer, offset, count).TrimNulls();
-
+        var s = Encoding.UTF8.GetString(buffer, offset, count).Replace('\0', ' ').Trim();
         if (string.IsNullOrEmpty(s))
         {
             return 0;
@@ -741,7 +823,7 @@ internal sealed partial class TarHeader
 
     private static long ReadAsciiInt64(byte[] buffer, int offset, int count)
     {
-        var s = Encoding.UTF8.GetString(buffer, offset, count).TrimNulls();
+        var s = Encoding.UTF8.GetString(buffer, offset, count).Replace('\0', ' ').Trim();
         if (string.IsNullOrEmpty(s))
         {
             return 0;

@@ -283,7 +283,11 @@ internal static partial class Utility
         }
     }
 
-    public static string TrimNulls(this string source) => source.Replace('\0', ' ').Trim();
+    public static string TrimNulls(this string source)
+    {
+        var index = source.AsSpan().IndexOf('\0');
+        return index < 0 ? source : source.Substring(0, index);
+    }
 
     /// <summary>
     /// Swap the endianness of a UINT32

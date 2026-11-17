@@ -495,9 +495,9 @@ public class TarReaderTests : ReaderTests
         stream.Position = 0;
 
         // Attempt to read this malformed archive
-        // The InvalidFormatException from the validation gets caught and converted to IncompleteArchiveException
+        // Invalid metadata sizes are reported without attempting to allocate the payload.
         // The important thing is it doesn't cause OutOfMemoryException
-        Assert.Throws<IncompleteArchiveException>(() =>
+        Assert.Throws<InvalidFormatException>(() =>
         {
             using var reader = TarReader.OpenReader(stream);
             reader.MoveToNextEntry();

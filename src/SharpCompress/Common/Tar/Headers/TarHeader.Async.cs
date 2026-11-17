@@ -225,6 +225,14 @@ internal sealed partial class TarHeader
                 await reader
                     .ReadBytesAsync(buffer, 0, BLOCK_SIZE, cancellationToken)
                     .ConfigureAwait(false);
+                if (!ValidateHeader(buffer))
+                {
+                    // Preserve the empty-header state used by TAR format detection.
+                    Name = string.Empty;
+                    Size = 0;
+                    EntryType = EntryType.File;
+                    return false;
+                }
                 entryType = ReadEntryType(buffer);
 
                 // LongName and LongLink headers can follow each other and need
@@ -269,12 +277,6 @@ internal sealed partial class TarHeader
                 break;
             }
 
-            // Check header checksum while the header buffer is still owned by this reader.
-            if (!checkChecksum(buffer))
-            {
-                return false;
-            }
-
             Name = ArchiveEncoding.Decode(buffer, 0, 100).TrimNulls();
             EntryType = entryType;
             Size = ReadSize(buffer);
@@ -286,18 +288,20 @@ internal sealed partial class TarHeader
                 LinkName = ArchiveEncoding.Decode(buffer, 157, 100).TrimNulls();
             }
 
-            Mode = ReadAsciiInt64Base8(buffer, 100, 7);
-            UserId = ReadAsciiInt64Base8oldGnu(buffer, 108, 7);
-            GroupId = ReadAsciiInt64Base8oldGnu(buffer, 116, 7);
+            Mode = ReadNumberOrZero(buffer, 100, 8);
+            UserId = ReadNumberOrZero(buffer, 108, 8);
+            GroupId = ReadNumberOrZero(buffer, 116, 8);
 
-            var unixTimeStamp = ReadAsciiInt64Base8(buffer, 136, 11);
+            DeviceMajor = ReadNumber(buffer, 329, 8);
+            DeviceMinor = ReadNumber(buffer, 337, 8);
 
-            LastModifiedTime = EPOCH.AddSeconds(unixTimeStamp).ToLocalTime();
+            LastModifiedTime = ReadModificationTime(buffer);
             Magic = ArchiveEncoding.Decode(buffer, 257, 6).TrimNulls();
 
-            if (!string.IsNullOrEmpty(Magic) && "ustar".Equals(Magic, StringComparison.Ordinal))
+            // GNU magic is "ustar ": its prefix area contains other metadata.
+            if (buffer.AsSpan(257, 6).SequenceEqual("ustar\0"u8))
             {
-                var namePrefix = ArchiveEncoding.Decode(buffer, 345, 157).TrimNulls();
+                var namePrefix = ArchiveEncoding.Decode(buffer, 345, 155).TrimNulls();
 
                 if (!string.IsNullOrEmpty(namePrefix))
                 {
@@ -317,9 +321,9 @@ internal sealed partial class TarHeader
             Mode |= 0b1_000_000_000;
         }
 
-        if (entryType != EntryType.LongName && Name.Length == 0)
+        if (Name.Length == 0)
         {
-            return false;
+            throw new InvalidFormatException("TAR header has an empty name.");
         }
 
         return true;
