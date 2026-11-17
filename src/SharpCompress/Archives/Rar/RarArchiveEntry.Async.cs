@@ -15,6 +15,10 @@ public partial class RarArchiveEntry
         CancellationToken cancellationToken = default
     )
     {
+        if (IsRedir)
+        {
+            throw new ArchiveOperationException("no stream for redirect entry");
+        }
         var readStream = await MultiVolumeReadOnlyAsyncStream
             .Create(Parts.ToAsyncEnumerable().CastAsync<RarFilePart>())
             .ConfigureAwait(false);

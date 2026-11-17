@@ -31,7 +31,13 @@ public abstract class RarEntry : Entry
     /// </summary>
     public override string? Key => FileHeader.FileName;
 
-    public override string? LinkTarget => null;
+    public override string? LinkTarget => RedirType is 1 or 2 or 3 ? RedirTargetName : null;
+
+    /// <summary>Whether the header omits the unpacked size. Size remains long.MaxValue in this case.</summary>
+    public bool IsUnpackedSizeUnknown => FileHeader.IsUnpackedSizeUnknown;
+
+    /// <summary>RAR5 redirection type: 0 none, 1 Unix symlink, 2 Windows symlink, 3 junction, 4 hardlink, 5 file copy.</summary>
+    public byte RedirType => FileHeader.RedirType;
 
     /// <summary>
     /// The entry last modified time in the archive, if recorded

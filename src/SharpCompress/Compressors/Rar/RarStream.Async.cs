@@ -28,6 +28,7 @@ internal partial class RarStream
         await unpack
             .DoUnpackAsync(fileHeader, readStream, this, cancellationToken)
             .ConfigureAwait(false);
+        finished = !unpack.Suspended;
         fetch = false;
         initialized = true;
         _position = 0;
@@ -70,17 +71,18 @@ internal partial class RarStream
             count -= toCopy;
             outTotal += toCopy;
         }
-        if (count > 0 && unpack.DestSize > 0)
+        if (count > 0 && !finished && unpack.DestSize > 0)
         {
             outBuffer = buffer;
             outOffset = offset;
             outCount = count;
             fetch = true;
             await unpack.DoUnpackAsync(cancellationToken).ConfigureAwait(false);
+            finished = !unpack.Suspended;
             fetch = false;
         }
         _position += outTotal;
-        if (count > 0 && outTotal == 0 && _position < Length)
+        if (count > 0 && outTotal == 0 && !fileHeader.IsUnpackedSizeUnknown && _position < Length)
         {
             // sanity check, eg if we try to decompress a redir entry
             throw new InvalidFormatException(

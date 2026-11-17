@@ -45,14 +45,15 @@ internal partial class FileHeader
             .ReadRarVIntUInt16Async(cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
-        var lvalue = checked(
-            (long)
-                await reader
-                    .ReadRarVIntAsync(cancellationToken: cancellationToken)
-                    .ConfigureAwait(false)
-        );
+        var lvalue = await reader
+            .ReadRarVIntAsync(cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
 
-        UncompressedSize = HasFlag(FileFlagsV5.UNPACKED_SIZE_UNKNOWN) ? long.MaxValue : lvalue;
+        if (!IsUnpackedSizeUnknown && lvalue > long.MaxValue)
+        {
+            throw new InvalidFormatException("RAR unpacked size exceeds the supported range.");
+        }
+        UncompressedSize = IsUnpackedSizeUnknown ? long.MaxValue : (long)lvalue;
 
         FileAttributes = await reader
             .ReadRarVIntUInt32Async(cancellationToken: cancellationToken)
@@ -116,10 +117,6 @@ internal partial class FileHeader
                         Rar5CryptoInfo = await Rar5CryptoInfo
                             .CreateAsync(reader, true)
                             .ConfigureAwait(false);
-                        if (Rar5CryptoInfo.PswCheck.All(singleByte => singleByte == 0))
-                        {
-                            Rar5CryptoInfo = null;
-                        }
                     }
                     break;
                 case FHEXTRA_HASH:

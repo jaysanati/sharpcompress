@@ -106,15 +106,51 @@ The stream overloads of `DetectArchive` and `InspectArchive` preserve the suppli
 ### RAR Entry Integrity
 
 RAR Archive and Reader entry streams validate CRC32 (or RAR5 BLAKE2sp when
-present) on both synchronous and asynchronous extraction paths. Drain an entry
-stream to the end to perform validation; a mismatch throws
-`InvalidFormatException`. Entries without a checksum are extracted without
-checksum validation. Disposing a partially read Archive entry stream does not
-validate the unread payload. Reader entry streams normally drain unread data
-on disposal (synchronous or asynchronous) unless the reader is cancelled, so
-disposal can validate the checksum and throw on a mismatch.
-Encrypted entries retain the existing checksum-checking
-limitations; this does not add authentication for encrypted RAR data.
+present) on synchronous and asynchronous extraction paths. Validation occurs
+when a read reaches the declared unpacked size, including callers that read
+exactly `Length` bytes, or at end of stream when the unpacked size is unknown.
+Zero-length reads do not finalize validation. Entries without a checksum are
+extracted without checksum validation.
+
+RAR4 encrypted entries use their plain CRC32. RAR5 encrypted entries use the
+format's keyed CRC32 or BLAKE2sp conversion when the encryption record requests
+it. A checksum mismatch in an encrypted entry throws
+`SharpCompress.Common.CryptographicException` with a "Wrong password or damaged
+RAR data" message; an unencrypted mismatch throws `InvalidFormatException`.
+A missing or invalid RAR5 password-check value does not remove encryption: the
+password is checked through the data checksum when one is present. RAR4 encrypted
+header parsing failures also throw `SharpCompress.Common.CryptographicException`.
+Out-of-range packed/unpacked sizes and seek targets throw `InvalidFormatException`;
+truncated headers are errors, while EOF exactly between headers remains supported
+for older archives without an end marker.
+
+Disposing a partially read Archive entry stream does not validate unread payload.
+Reader entry streams normally drain unread data on disposal unless the reader is
+cancelled, so disposal can validate the checksum and throw on a mismatch.
+
+### RAR Unknown Sizes and Redirect Entries
+
+`SharpCompress.Common.Rar.RarEntry` adds these read-only properties:
+
+```csharp
+public bool IsUnpackedSizeUnknown { get; }
+public byte RedirType { get; }
+```
+
+When `IsUnpackedSizeUnknown` is true, the existing `Size` and entry-stream `Length`
+remain `long.MaxValue` for compatibility; this is a sentinel, not an allocation
+size. Read until EOF. The decoder stops at the compressed stream's end and does
+not enforce an unavailable unpacked size.
+
+`IsRedir` and `RedirTargetName` remain available. `RedirType` is 0 for ordinary
+entries, 1 for Unix symlinks, 2 for Windows symlinks, 3 for junctions, 4 for
+hardlinks, and 5 for file copies. The existing `public override string? LinkTarget
+{ get; }` now returns `RedirTargetName` for types 1?3 and null for other types.
+Both Archive and Reader `OpenEntryStream()` / `OpenEntryStreamAsync(...)` throw
+`ArchiveOperationException` for redirect entries. Advancing past a redirect in a
+Reader (including `ExtractAllEntries`) skips it without decoding, preserving
+solid-file traversal. Redirect targets are metadata; stream opening does not
+resolve hardlinks or copies.
 
 ### RAR5 Archive Comments
 

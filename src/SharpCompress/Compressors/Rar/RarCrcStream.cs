@@ -9,7 +9,6 @@ internal partial class RarCrcStream : RarStream
     private readonly string? _key;
     private readonly MultiVolumeReadOnlyStreamBase _readStream;
     private uint _currentCrc;
-    private readonly bool _disableCrc;
 
     private RarCrcStream(
         IRarUnpack unpack,
@@ -20,7 +19,6 @@ internal partial class RarCrcStream : RarStream
     {
         this._readStream = readStream;
         _key = fileHeader.FileName;
-        _disableCrc = fileHeader.IsEncrypted;
         ResetCrc();
     }
 
@@ -39,6 +37,34 @@ internal partial class RarCrcStream : RarStream
 
     public void ResetCrc() => _currentCrc = 0xffffffff;
 
+    private void VerifyCrc(int result, int count)
+    {
+        if (
+            count == 0
+            || (result != 0 && !ReachedDeclaredSize)
+            || _readStream.CurrentCrc is not { } crc
+        )
+        {
+            return;
+        }
+        var value = GetCrc();
+        var raw = new byte[]
+        {
+            (byte)value,
+            (byte)(value >> 8),
+            (byte)(value >> 16),
+            (byte)(value >> 24),
+        };
+        if (!_readStream.ConvertHashToMac(raw).AsSpan().SequenceEqual(crc))
+        {
+            if (IsEncrypted)
+            {
+                throw new CryptographicException("Wrong password or damaged RAR data: " + _key);
+            }
+            throw new InvalidFormatException("file crc mismatch: " + _key);
+        }
+    }
+
     public override int Read(byte[] buffer, int offset, int count)
     {
         var result = base.Read(buffer, offset, count);
@@ -46,16 +72,7 @@ internal partial class RarCrcStream : RarStream
         {
             _currentCrc = RarCRC.CheckCrc(_currentCrc, buffer, offset, result);
         }
-        else if (
-            !_disableCrc
-            && count != 0
-            && _readStream.CurrentCrc is { } crc
-            && GetCrc() != BitConverter.ToUInt32(crc, 0)
-        )
-        {
-            // NOTE: we use the last FileHeader in a multipart volume to check CRC
-            throw new InvalidFormatException("file crc mismatch: " + _key);
-        }
+        VerifyCrc(result, count);
 
         return result;
     }

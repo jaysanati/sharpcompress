@@ -24,16 +24,9 @@ internal partial class RarHeader : IRarHeader
         IArchiveEncoding archiveEncoding
     )
     {
-        try
-        {
-            var header = new RarHeader();
-            header.Initialize(reader, isRar5, archiveEncoding);
-            return header;
-        }
-        catch (InvalidFormatException)
-        {
-            return null;
-        }
+        var header = new RarHeader();
+        header.Initialize(reader, isRar5, archiveEncoding);
+        return header;
     }
 
     private void Initialize(
@@ -75,6 +68,10 @@ internal partial class RarHeader : IRarHeader
             {
                 AdditionalDataSize = reader.ReadUInt32();
             }
+        }
+        if (AdditionalDataSize < 0)
+        {
+            throw new InvalidFormatException("RAR packed size exceeds the supported range.");
         }
     }
 

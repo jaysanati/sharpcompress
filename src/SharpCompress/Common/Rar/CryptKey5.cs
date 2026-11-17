@@ -103,6 +103,8 @@ internal class CryptKey5 : ICryptKey
             throw new CryptographicException("The password did not match.");
         }
 
+        _cryptoInfo.HashKey = _cryptoInfo.UseHashMac ? _hashKey : null;
+
         using var aes = Aes.Create();
         aes.KeySize = AES_256;
         aes.Mode = CipherMode.CBC;

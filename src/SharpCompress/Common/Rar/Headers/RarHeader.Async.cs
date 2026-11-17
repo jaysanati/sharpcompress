@@ -15,18 +15,11 @@ internal partial class RarHeader
         CancellationToken cancellationToken = default
     )
     {
-        try
-        {
-            var header = new RarHeader();
-            await header
-                .InitializeAsync(reader, isRar5, archiveEncoding, cancellationToken)
-                .ConfigureAwait(false);
-            return header;
-        }
-        catch (InvalidFormatException)
-        {
-            return null;
-        }
+        var header = new RarHeader();
+        await header
+            .InitializeAsync(reader, isRar5, archiveEncoding, cancellationToken)
+            .ConfigureAwait(false);
+        return header;
     }
 
     private async ValueTask InitializeAsync(
@@ -81,6 +74,10 @@ internal partial class RarHeader
                     .ReadUInt32Async(cancellationToken)
                     .ConfigureAwait(false);
             }
+        }
+        if (AdditionalDataSize < 0)
+        {
+            throw new InvalidFormatException("RAR packed size exceeds the supported range.");
         }
     }
 

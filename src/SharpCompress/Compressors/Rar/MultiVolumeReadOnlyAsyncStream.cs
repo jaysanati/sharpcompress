@@ -29,6 +29,7 @@ internal sealed partial class MultiVolumeReadOnlyAsyncStream : MultiVolumeReadOn
         currentStream = filePartEnumerator.Current.GetCompressedStream();
 
         CurrentCrc = filePartEnumerator.Current.FileHeader.FileCrc;
+        CurrentCryptoInfo = filePartEnumerator.Current.FileHeader.Rar5CryptoInfo;
     }
 
     public override int Read(byte[] buffer, int offset, int count) =>

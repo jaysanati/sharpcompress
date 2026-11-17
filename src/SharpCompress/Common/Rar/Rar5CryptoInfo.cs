@@ -24,6 +24,8 @@ internal class Rar5CryptoInfo
             encryptionFlags,
             EncryptionFlagsV5.CHFL_CRYPT_PSWCHECK
         );
+        cryptoInfo.UseHashMac =
+            readInitV && (encryptionFlags & EncryptionFlagsV5.FHEXTRA_CRYPT_HASHMAC) != 0;
         cryptoInfo.LG2Count = reader.ReadByte();
 
         if (cryptoInfo.LG2Count > EncryptionConstV5.CRYPT5_KDF_LG2_COUNT_MAX)
@@ -78,6 +80,8 @@ internal class Rar5CryptoInfo
             encryptionFlags,
             EncryptionFlagsV5.CHFL_CRYPT_PSWCHECK
         );
+        cryptoInfo.UseHashMac =
+            readInitV && (encryptionFlags & EncryptionFlagsV5.FHEXTRA_CRYPT_HASHMAC) != 0;
         cryptoInfo.LG2Count = await reader
             .ReadByteAsync(CancellationToken.None)
             .ConfigureAwait(false);
@@ -126,6 +130,9 @@ internal class Rar5CryptoInfo
         InitV = await reader
             .ReadBytesAsync(EncryptionConstV5.SIZE_INITV, CancellationToken.None)
             .ConfigureAwait(false);
+
+    public bool UseHashMac;
+    public byte[]? HashKey;
 
     public bool UsePswCheck = false;
 

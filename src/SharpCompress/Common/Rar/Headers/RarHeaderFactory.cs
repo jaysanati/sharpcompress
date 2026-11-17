@@ -52,6 +52,10 @@ public partial class RarHeaderFactory
 
     public IEnumerable<IRarHeader> ReadHeaders(Stream stream)
     {
+        using var scanStream = SharpCompressStream.Create(
+            SharpCompressStream.CreateNonDisposing(stream)
+        );
+        stream = scanStream;
         ResetHeaderScanState();
         var markHeader = MarkHeader.Read(stream, Options.LeaveStreamOpen, Options.LookForHeader);
         _isRar5 = markHeader.IsRar5;
@@ -71,6 +75,38 @@ public partial class RarHeaderFactory
     }
 
     private RarHeader? TryReadNextHeader(Stream stream)
+    {
+        // Probe before decryption: only a boundary EOF is valid, including old archives
+        // without an end marker. A partial salt, CRC, or encrypted block is an error.
+        var recording = (SharpCompressStream)stream;
+        recording.StartRecording();
+        var read = stream.ReadByte() == -1 ? 0 : 1;
+        recording.Rewind(true);
+        if (read == 0)
+        {
+            return null;
+        }
+        try
+        {
+            return ReadNextHeaderCore(stream);
+        }
+        catch (Exception ex)
+            when (IsEncrypted
+                && (
+                    ex is InvalidFormatException
+                    || ex is EndOfStreamException
+                    || ex is OverflowException
+                    || ex is IndexOutOfRangeException
+                    || ex is ArgumentException
+                    || ex is IncompleteArchiveException
+                )
+            )
+        {
+            throw new CryptographicException("Wrong password or damaged encrypted RAR header.", ex);
+        }
+    }
+
+    private RarHeader? ReadNextHeaderCore(Stream stream)
     {
         RarCrcBinaryReader reader;
         if (!IsEncrypted)
@@ -127,7 +163,7 @@ public partial class RarHeaderFactory
                 {
                     case StreamingMode.Seekable:
                         {
-                            reader.BaseStream.Position += ph.DataSize;
+                            AdvanceData(reader.BaseStream, ph.DataSize);
                         }
                         break;
                     case StreamingMode.Streaming:
@@ -175,7 +211,7 @@ public partial class RarHeaderFactory
                     case StreamingMode.Seekable:
                         {
                             fh.DataStartPosition = reader.BaseStream.Position;
-                            reader.BaseStream.Position += fh.CompressedSize;
+                            AdvanceData(reader.BaseStream, fh.CompressedSize);
                         }
                         break;
                     case StreamingMode.Streaming:
@@ -231,6 +267,16 @@ public partial class RarHeaderFactory
         }
     }
 
+    private static void AdvanceData(Stream stream, long size)
+    {
+        var position = stream.Position;
+        if (size < 0 || position < 0 || position > stream.Length || size > stream.Length - position)
+        {
+            throw new InvalidFormatException("RAR data extends outside the stream.");
+        }
+        stream.Position = position + size;
+    }
+
     private void SkipData(FileHeader fh, RarCrcBinaryReader reader)
     {
         switch (StreamingMode)
@@ -238,7 +284,7 @@ public partial class RarHeaderFactory
             case StreamingMode.Seekable:
                 {
                     fh.DataStartPosition = reader.BaseStream.Position;
-                    reader.BaseStream.Position += fh.CompressedSize;
+                    AdvanceData(reader.BaseStream, fh.CompressedSize);
                 }
                 break;
             case StreamingMode.Streaming:

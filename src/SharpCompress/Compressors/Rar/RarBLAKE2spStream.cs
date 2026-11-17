@@ -8,7 +8,6 @@ namespace SharpCompress.Compressors.Rar;
 internal partial class RarBLAKE2spStream : RarStream
 {
     private readonly MultiVolumeReadOnlyStreamBase readStream;
-    private readonly bool disableCRCCheck;
 
     private const int BLAKE2S_NUM_ROUNDS = 10;
     private const uint BLAKE2S_FINAL_FLAG = ~(uint)0;
@@ -112,8 +111,6 @@ internal partial class RarBLAKE2spStream : RarStream
     {
         this.readStream = readStream;
 
-        // TODO: rar uses a modified hash xor'ed with encryption key?
-        disableCRCCheck = fileHeader.IsEncrypted;
         this._blake2sp = CreateBlake2sp();
     }
 
@@ -341,6 +338,26 @@ internal partial class RarBLAKE2spStream : RarStream
         }
     }
 
+    private void VerifyHash(int result, int count)
+    {
+        if (count == 0 || (result != 0 && !ReachedDeclaredSize))
+        {
+            return;
+        }
+        EnsureHash();
+        if (
+            readStream.CurrentCrc is { } crc
+            && !readStream.ConvertHashToMac(GetCrc()).AsSpan().SequenceEqual(crc)
+        )
+        {
+            if (IsEncrypted)
+            {
+                throw new CryptographicException("Wrong password or damaged RAR data.");
+            }
+            throw new InvalidFormatException("file crc mismatch");
+        }
+    }
+
     public override int Read(byte[] buffer, int offset, int count)
     {
         var result = base.Read(buffer, offset, count);
@@ -348,15 +365,7 @@ internal partial class RarBLAKE2spStream : RarStream
         {
             Update(this._blake2sp!, new ReadOnlySpan<byte>(buffer, offset, result));
         }
-        else if (count != 0)
-        {
-            EnsureHash();
-            if (!disableCRCCheck && !GetCrc().SequenceEqual(readStream.CurrentCrc))
-            {
-                // NOTE: we use the last FileHeader in a multipart volume to check CRC
-                throw new InvalidFormatException("file crc mismatch");
-            }
-        }
+        VerifyHash(result, count);
 
         return result;
     }

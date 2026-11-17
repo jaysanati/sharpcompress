@@ -32,15 +32,7 @@ internal partial class RarBLAKE2spStream : RarStream
         {
             Update(_blake2sp!, new ReadOnlySpan<byte>(buffer, offset, result));
         }
-        else if (count != 0)
-        {
-            EnsureHash();
-            if (!disableCRCCheck && !GetCrc().SequenceEqual(readStream.CurrentCrc))
-            {
-                // NOTE: we use the last FileHeader in a multipart volume to check CRC
-                throw new InvalidFormatException("file crc mismatch");
-            }
-        }
+        VerifyHash(result, count);
 
         return result;
     }
@@ -56,15 +48,7 @@ internal partial class RarBLAKE2spStream : RarStream
         {
             Update(_blake2sp!, buffer.Span.Slice(0, result));
         }
-        else if (!buffer.IsEmpty)
-        {
-            EnsureHash();
-            if (!disableCRCCheck && !GetCrc().SequenceEqual(readStream.CurrentCrc))
-            {
-                // NOTE: we use the last FileHeader in a multipart volume to check CRC
-                throw new InvalidFormatException("file crc mismatch");
-            }
-        }
+        VerifyHash(result, buffer.Length);
 
         return result;
     }

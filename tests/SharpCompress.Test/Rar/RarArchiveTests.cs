@@ -813,8 +813,8 @@ public class RarArchiveTests : ArchiveTests
         var testFile = "Rar.malformed_512byte.rar";
         var readerOptions = ReaderOptions.ForExternalStream.WithLookForHeader(true);
 
-        // This should throw InvalidOperationException, not hang in an infinite loop
-        var exception = Assert.Throws<ArchiveOperationException>(() =>
+        // Reject the out-of-range packed data before attempting to seek.
+        var exception = Assert.Throws<InvalidFormatException>(() =>
         {
             using var fileStream = File.Open(
                 Path.Combine(TEST_ARCHIVES_PATH, testFile),
@@ -831,6 +831,6 @@ public class RarArchiveTests : ArchiveTests
         });
 
         // Verify that the exception is related to seeking beyond available data
-        Assert.Contains("Cannot seek to position", exception.Message);
+        Assert.Contains("RAR data extends outside the stream", exception.Message);
     }
 }

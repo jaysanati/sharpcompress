@@ -671,3 +671,17 @@ loading and throws `NotSupportedException` if exceeded. The default is `null`
 extraction time; RAR1 through RAR4 require a fixed 4 MiB window. It does not bound total
 extraction memory. RAR5 dictionaries of 2 GiB or larger throw
 `NotSupportedException` with the requested size.
+
+### Traversing RAR links and unknown-size entries
+
+For solid RAR archives, use `ExtractAllEntries()` (or its async counterpart) to
+retain the decompression dictionary across entries. Inspect each entry as a
+`SharpCompress.Common.Rar.RarEntry`; when `IsRedir` is true, record its
+`RedirType`/`RedirTargetName` and advance to the next entry. Explicitly opening a
+redirect as a stream throws `ArchiveOperationException`. `LinkTarget` is populated
+for symlinks and junctions.
+
+When `IsUnpackedSizeUnknown` is true, do not allocate from `Size` or assume it is
+the actual length: its compatibility value is `long.MaxValue`. Copy the entry
+stream until EOF. Checksum verification runs at EOF for these entries, and at the
+declared size for entries with a known size.

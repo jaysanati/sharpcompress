@@ -36,10 +36,14 @@ internal partial class FileHeader : RarHeader
     {
         Flags = reader.ReadRarVIntUInt16();
 
-        var lvalue = checked((long)reader.ReadRarVInt());
+        var lvalue = reader.ReadRarVInt();
 
         // long.MaxValue causes the unpack code to finish when the input stream is exhausted
-        UncompressedSize = HasFlag(FileFlagsV5.UNPACKED_SIZE_UNKNOWN) ? long.MaxValue : lvalue;
+        if (!IsUnpackedSizeUnknown && lvalue > long.MaxValue)
+        {
+            throw new InvalidFormatException("RAR unpacked size exceeds the supported range.");
+        }
+        UncompressedSize = IsUnpackedSizeUnknown ? long.MaxValue : (long)lvalue;
 
         FileAttributes = reader.ReadRarVIntUInt32();
 
@@ -103,11 +107,6 @@ internal partial class FileHeader : RarHeader
                 case FHEXTRA_CRYPT: // file encryption
                     {
                         Rar5CryptoInfo = Rar5CryptoInfo.Create(reader, true);
-
-                        if (Rar5CryptoInfo.PswCheck.All(singleByte => singleByte == 0))
-                        {
-                            Rar5CryptoInfo = null;
-                        }
                     }
                     break;
                 case FHEXTRA_HASH:
@@ -318,6 +317,10 @@ internal partial class FileHeader : RarHeader
 
     private static long UInt32To64(uint x, uint y)
     {
+        if (x > int.MaxValue)
+        {
+            throw new InvalidFormatException("RAR size exceeds the supported range.");
+        }
         long l = x;
         l <<= 32;
         return l + y;
@@ -417,6 +420,8 @@ internal partial class FileHeader : RarHeader
     internal Rar5CryptoInfo? Rar5CryptoInfo { get; private set; }
     internal uint FileAttributes { get; private set; }
     internal long CompressedSize { get; private set; }
+    internal bool IsUnpackedSizeUnknown => IsRar5 && HasFlag(FileFlagsV5.UNPACKED_SIZE_UNKNOWN);
+
     internal long UncompressedSize { get; private set; }
     internal string? FileName { get; private set; }
     internal byte[]? SubData { get; private set; }

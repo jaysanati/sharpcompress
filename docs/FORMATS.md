@@ -45,6 +45,9 @@
 ### Rar Format Notes
 
 - RAR5 encrypted headers and data accept KDF counts from 0 through 24 (the binary logarithm of the PBKDF2 iteration count), matching UnRAR's acceptance limit. Larger counts are rejected before key derivation.
+- RAR4 encrypted entries verify CRC32; RAR5 encrypted entries verify CRC32/BLAKE2sp, including keyed checksums when requested by the encryption record.
+- RAR5 unknown unpacked sizes support reading to EOF; inspect `RarEntry.IsUnpackedSizeUnknown` before using `Size`.
+- RAR5 symlinks/junctions expose `LinkTarget`; hardlinks/file copies expose `RedirType` and `RedirTargetName`. Redirects can be skipped during solid traversal, but cannot be opened as data streams.
 - RAR companion filenames use the same exact-match-first, case-insensitive fallback as ZIP, with ambiguous fallback matches rejected.
 - Encrypted ciphertext must contain complete AES blocks. Truncation throws `InvalidFormatException` on both synchronous and asynchronous reads.
 

@@ -227,19 +227,29 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
     private void UnstoreFile()
     {
-        Span<byte> buffer = stackalloc byte[(int)Math.Min(0x10000, destUnpSize)];
-        do
+        var rented = ArrayPool<byte>.Shared.Rent(0x10000);
+        try
         {
-            var code = readStream.Read(buffer);
-            if (code == 0 || code == -1)
+            var buffer = rented.AsSpan(0, 0x10000);
+            do
             {
-                break;
-            }
+                var code = readStream.Read(
+                    buffer.Slice(0, (int)Math.Min(buffer.Length, destUnpSize))
+                );
+                if (code == 0 || code == -1)
+                {
+                    break;
+                }
 
-            code = code < destUnpSize ? code : (int)destUnpSize;
-            writeStream.Write(buffer.Slice(0, code));
-            destUnpSize -= code;
-        } while (!suspended && destUnpSize > 0);
+                code = code < destUnpSize ? code : (int)destUnpSize;
+                writeStream.Write(buffer.Slice(0, code));
+                destUnpSize -= code;
+            } while (!suspended && destUnpSize > 0);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     private void Unpack29(bool solid)

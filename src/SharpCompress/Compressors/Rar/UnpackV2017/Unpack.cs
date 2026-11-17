@@ -121,17 +121,25 @@ internal partial class Unpack : IRarUnpack
 
     private void UnstoreFile()
     {
-        Span<byte> b = stackalloc byte[(int)Math.Min(0x10000, DestUnpSize)];
-        do
+        var rented = ArrayPool<byte>.Shared.Rent(0x10000);
+        try
         {
-            var n = readStream.Read(b.Slice(0, (int)Math.Min(b.Length, DestUnpSize)));
-            if (n == 0)
+            var b = rented.AsSpan(0, 0x10000);
+            do
             {
-                break;
-            }
-            writeStream.Write(b.Slice(0, n));
-            DestUnpSize -= n;
-        } while (!Suspended && DestUnpSize > 0);
+                var n = readStream.Read(b.Slice(0, (int)Math.Min(b.Length, DestUnpSize)));
+                if (n == 0)
+                {
+                    break;
+                }
+                writeStream.Write(b.Slice(0, n));
+                DestUnpSize -= n;
+            } while (!Suspended && DestUnpSize > 0);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     private async ValueTask UnstoreFileAsync(CancellationToken cancellationToken = default)

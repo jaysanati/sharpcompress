@@ -16,6 +16,13 @@ internal partial class RarStream : Stream
 
     private bool fetch;
 
+    // A returned, unsuspended unpacker has consumed its end marker even when
+    // the header has no unpacked size and DestSize is still positive.
+    private bool finished;
+
+    protected bool ReachedDeclaredSize => !fileHeader.IsUnpackedSizeUnknown && Position >= Length;
+    protected bool IsEncrypted => fileHeader.IsEncrypted;
+
     private byte[] tmpBuffer = ArrayPool<byte>.Shared.Rent(65536);
     private int tmpOffset;
     private int tmpCount;
@@ -44,6 +51,7 @@ internal partial class RarStream : Stream
 
         fetch = true;
         unpack.DoUnpack(fileHeader, readStream, this);
+        finished = !unpack.Suspended;
         fetch = false;
         initialized = true;
         _position = 0;
@@ -100,17 +108,18 @@ internal partial class RarStream : Stream
             count -= toCopy;
             outTotal += toCopy;
         }
-        if (count > 0 && unpack.DestSize > 0)
+        if (count > 0 && !finished && unpack.DestSize > 0)
         {
             outBuffer = buffer;
             outOffset = offset;
             outCount = count;
             fetch = true;
             unpack.DoUnpack();
+            finished = !unpack.Suspended;
             fetch = false;
         }
         _position += outTotal;
-        if (count > 0 && outTotal == 0 && _position < Length)
+        if (count > 0 && outTotal == 0 && !fileHeader.IsUnpackedSizeUnknown && _position < Length)
         {
             // sanity check, eg if we try to decompress a redir entry
             throw new InvalidFormatException(

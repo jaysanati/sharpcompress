@@ -14,6 +14,10 @@ public partial class RarHeaderFactory
 {
     public async IAsyncEnumerable<IRarHeader> ReadHeadersAsync(Stream stream)
     {
+        using var scanStream = SharpCompressStream.Create(
+            SharpCompressStream.CreateNonDisposing(stream)
+        );
+        stream = scanStream;
         ResetHeaderScanState();
         var markHeader = await MarkHeader
             .ReadAsync(
@@ -45,6 +49,42 @@ public partial class RarHeaderFactory
     }
 
     private async ValueTask<RarHeader?> TryReadNextHeaderAsync(
+        Stream stream,
+        CancellationToken cancellationToken
+    )
+    {
+        // Probe before decryption: only a boundary EOF is valid, including old archives
+        // without an end marker. A partial salt, CRC, or encrypted block is an error.
+        var recording = (SharpCompressStream)stream;
+        recording.StartRecording();
+        var probe = new byte[1];
+        var read = await stream.ReadAsync(probe, 0, 1, cancellationToken).ConfigureAwait(false);
+        recording.Rewind(true);
+        if (read == 0)
+        {
+            return null;
+        }
+        try
+        {
+            return await ReadNextHeaderCoreAsync(stream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+            when (IsEncrypted
+                && (
+                    ex is InvalidFormatException
+                    || ex is EndOfStreamException
+                    || ex is OverflowException
+                    || ex is IndexOutOfRangeException
+                    || ex is ArgumentException
+                    || ex is IncompleteArchiveException
+                )
+            )
+        {
+            throw new CryptographicException("Wrong password or damaged encrypted RAR header.", ex);
+        }
+    }
+
+    private async ValueTask<RarHeader?> ReadNextHeaderCoreAsync(
         Stream stream,
         CancellationToken cancellationToken
     )
@@ -114,7 +154,7 @@ public partial class RarHeaderFactory
                 {
                     case StreamingMode.Seekable:
                         {
-                            reader.BaseStream.Position += ph.DataSize;
+                            AdvanceData(reader.BaseStream, ph.DataSize);
                         }
                         break;
                     case StreamingMode.Streaming:
@@ -168,7 +208,7 @@ public partial class RarHeaderFactory
                     case StreamingMode.Seekable:
                         {
                             fh.DataStartPosition = reader.BaseStream.Position;
-                            reader.BaseStream.Position += fh.CompressedSize;
+                            AdvanceData(reader.BaseStream, fh.CompressedSize);
                         }
                         break;
                     case StreamingMode.Streaming:
@@ -239,7 +279,7 @@ public partial class RarHeaderFactory
             case StreamingMode.Seekable:
                 {
                     fh.DataStartPosition = reader.BaseStream.Position;
-                    reader.BaseStream.Position += fh.CompressedSize;
+                    AdvanceData(reader.BaseStream, fh.CompressedSize);
                 }
                 break;
             case StreamingMode.Streaming:

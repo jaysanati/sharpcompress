@@ -71,6 +71,10 @@ public partial class RarArchiveEntry : RarEntry, IArchiveEntry
 
     public Stream OpenEntryStream()
     {
+        if (IsRedir)
+        {
+            throw new ArchiveOperationException("no stream for redirect entry");
+        }
         var readStream = new MultiVolumeReadOnlyStream(Parts.Cast<RarFilePart>());
         RarStream stream;
         if (IsRarV3)
