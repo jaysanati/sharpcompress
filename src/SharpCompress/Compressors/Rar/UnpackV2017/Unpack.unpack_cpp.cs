@@ -14,12 +14,14 @@ namespace SharpCompress.Compressors.Rar.UnpackV2017;
 internal sealed partial class Unpack : BitInput
 {
     private bool disposed;
+    private readonly long? maxDecoderMemory;
+    private bool firstWindowDone;
 
-    public Unpack( /* ComprDataIO *DataIO */
-    )
+    public Unpack(long? maxDecoderMemory = null)
         //:Inp(true),VMCodeInp(true)
         : base(true)
     {
+        this.maxDecoderMemory = maxDecoderMemory;
         _UnpackCtor();
 
         //UnpIO=DataIO;
@@ -88,8 +90,17 @@ internal sealed partial class Unpack : BitInput
         disposed = true;
     }
 
-    private void Init(size_t WinSize, bool Solid)
+    private void Init(long requestedSize, bool Solid)
     {
+        if (maxDecoderMemory is long maximum && Math.Max(requestedSize, 0x40000) > maximum)
+        {
+            throw new NotSupportedException("RAR window exceeds ReaderOptions.MaxDecoderMemory.");
+        }
+        if (requestedSize > int.MaxValue)
+        {
+            throw new NotSupportedException($"RAR dictionary too large: {requestedSize} bytes.");
+        }
+        var WinSize = (size_t)requestedSize;
         // If 32-bit RAR unpacks an archive with 4 GB dictionary, the window size
         // will be 0 because of size_t overflow. Let's issue the memory error.
         if (WinSize == 0)
@@ -167,8 +178,7 @@ internal sealed partial class Unpack : BitInput
             {
                 // Clean the window to generate the same output when unpacking corrupt
                 // RAR files, which may access unused areas of sliding dictionary.
-                // sharpcompress: don't need this, freshly allocated above
-                //memset(NewWindow,0,WinSize);
+                Array.Clear(NewWindow, 0, (int)WinSize);
 
                 // If Window is not NULL, it means that window size has grown.
                 // In solid streams we need to copy data to a new window in such case.
@@ -297,6 +307,7 @@ internal sealed partial class Unpack : BitInput
     {
         if (!Solid)
         {
+            firstWindowDone = false;
             new Span<uint>(OldDist).Clear();
             OldDistPtr = 0;
             LastDist = LastLength = 0;

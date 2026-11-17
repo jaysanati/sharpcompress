@@ -368,7 +368,7 @@ await writer.WriteAllAsync("C:\\source", "*", SearchOption.AllDirectories, cance
 
 ## Common Options
 
-### Decoder memory limits (7z)
+### Decoder memory limits (7z and RAR)
 
 `ReaderOptions` adds `public long? MaxDecoderMemory { get; set; }` (default `null`).
 Set it to a byte limit for each 7z PPMd allocator or LZMA/LZMA2 dictionary declared
@@ -376,6 +376,18 @@ in metadata, including encoded headers. The check runs while metadata is read,
 before decoder buffers are rented, in both sync and async archive APIs.
 Exceeding the limit throws `NotSupportedException`. This is not an aggregate
 memory limit: pools, model tables, parallel workers, and other formats are not covered.
+
+RAR archive and reader APIs also enforce this limit during extraction, before
+allocating a RAR window or a RAR3 PPMd heap, including async extraction. RAR1 through RAR4
+use a fixed 4 MiB window; RAR5 uses the declared dictionary size (at least 256 KiB
+is allocated). PPMd resets retain the largest backing allocation but use the
+requested logical model size. Exceeding the caller limit throws
+`NotSupportedException`. RAR5 dictionaries of 2 GiB or larger are unsupported
+and throw `NotSupportedException` identifying the requested byte size.
+
+RAR3 decoding recognizes only the six standard WinRAR filters (E8, E8E9,
+Itanium, delta, RGB, audio). Custom VM programs and invalid filter parameters
+throw `InvalidFormatException`.
 
 Malformed 7z PPMd properties throw `InvalidFormatException`. SDK-valid PPMd
 memory sizes that exceed the managed allocator's capacity throw `NotSupportedException`.

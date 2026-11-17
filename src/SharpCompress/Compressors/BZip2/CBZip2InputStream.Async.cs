@@ -484,6 +484,10 @@ internal partial class CBZip2InputStream
                     {
                         s += (1 + 1) * N;
                     }
+                    if (s >= limitLast - last - 1 || N > limitLast)
+                    {
+                        throw new InvalidFormatException("BZip2: run exceeds block size");
+                    }
                     N *= 2;
                     {
                         int zt,

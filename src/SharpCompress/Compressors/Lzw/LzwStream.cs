@@ -300,6 +300,10 @@ public partial class LzwStream : Stream
                 // Generate output characters in reverse order
                 while (code >= 256)
                 {
+                    if (code >= lFreeEnt || lStackP == 0)
+                    {
+                        throw new InvalidFormatException("LZW: invalid or cyclic prefix chain.");
+                    }
                     lStack[--lStackP] = lTabSuffix[code];
                     code = lTabPrefix[code];
                 }
@@ -374,6 +378,10 @@ public partial class LzwStream : Stream
     private int ResetBuf(int bitPosition)
     {
         int pos = bitPosition >> 3;
+        if (pos > end)
+        {
+            throw new InvalidFormatException("LZW: truncated code padding.");
+        }
         Array.Copy(data, pos, data, 0, end - pos);
         end -= pos;
         return 0;

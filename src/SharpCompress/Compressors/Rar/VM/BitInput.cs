@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using SharpCompress.Common;
 
 namespace SharpCompress.Compressors.Rar.VM;
 
@@ -22,11 +23,15 @@ internal class BitInput : IDisposable
         get => inBit;
         set => inBit = value;
     }
-    private readonly byte[] _privateBuffer = ArrayPool<byte>.Shared.Rent(MAX_SIZE);
+    private readonly byte[] _privateBuffer = ArrayPool<byte>.Shared.Rent(MAX_SIZE + 3);
     private bool _disposed;
 
     /// <summary>  </summary>
-    internal BitInput() => InBuf = _privateBuffer;
+    internal BitInput()
+    {
+        InBuf = _privateBuffer;
+        Array.Clear(InBuf, 0, InBuf.Length);
+    }
 
     internal byte[] InBuf { get; }
 
@@ -65,25 +70,17 @@ internal class BitInput : IDisposable
     /// <returns>
     /// the bits (unsigned short)
     /// </returns>
-    internal int GetBits() =>
-        //      int BitField=0;
-        //      BitField|=(int)(inBuf[inAddr] << 16)&0xFF0000;
-        //      BitField|=(int)(inBuf[inAddr+1] << 8)&0xff00;
-        //      BitField|=(int)(inBuf[inAddr+2])&0xFF;
-        //      BitField >>>= (8-inBit);
-        //      return (BitField & 0xffff);
-        (
-            (
-                Utility.URShift(
-                    (
-                        ((InBuf[inAddr] & 0xff) << 16)
-                        + ((InBuf[inAddr + 1] & 0xff) << 8)
-                        + ((InBuf[inAddr + 2] & 0xff))
-                    ),
-                    (8 - inBit)
-                )
-            ) & 0xffff
-        );
+    internal int GetBits()
+    {
+        if ((uint)inAddr >= MAX_SIZE)
+        {
+            throw new InvalidFormatException("Truncated RAR bit input.");
+        }
+        // Three zero lookahead bytes allow a final partial byte to be read
+        // without indexing past the logical buffer boundary.
+        return ((InBuf[inAddr] << 16 | InBuf[inAddr + 1] << 8 | InBuf[inAddr + 2]) >> (8 - inBit))
+            & 0xffff;
+    }
 
     /// <summary> Indicates an Overfow</summary>
     /// <param name="IncPtr">how many bytes to inc

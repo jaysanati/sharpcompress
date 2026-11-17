@@ -144,7 +144,7 @@ internal class SubAllocator : IDisposable
 
             if (heap is not null)
             {
-                ArrayPool<byte>.Shared.Return(heap, clearArray: true);
+                ArrayPool<byte>.Shared.Return(heap);
             }
         }
     }
@@ -160,7 +160,6 @@ internal class SubAllocator : IDisposable
         {
             return true;
         }
-        StopSubAllocator();
         var allocation = ((long)t / FIXED_UNIT_SIZE * UNIT_SIZE) + UNIT_SIZE;
         if (t < 0 || allocation + 1 + 4 * N_INDEXES + RarMemBlock.SIZE > int.MaxValue)
         {
@@ -176,8 +175,17 @@ internal class SubAllocator : IDisposable
         _tempMemBlockPos = realAllocSize;
         realAllocSize += RarMemBlock.SIZE;
 
-        _heap = ArrayPool<byte>.Shared.Rent(realAllocSize);
-        new Span<byte>(_heap, 0, realAllocSize).Clear();
+        if (_heap is null || _heap.Length < realAllocSize)
+        {
+            var replacement = ArrayPool<byte>.Shared.Rent(realAllocSize);
+            if (_heap is not null)
+            {
+                ArrayPool<byte>.Shared.Return(_heap);
+            }
+            _heap = replacement;
+        }
+        // InitSubAllocator and RestartModelRare initialize all live nodes.
+        // Clearing the entire heap on each reset makes small inputs expensive.
         _heapStart = 1;
         _heapEnd = _heapStart + allocSize - UNIT_SIZE;
         _subAllocatorSize = t;

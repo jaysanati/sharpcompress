@@ -16,12 +16,15 @@ public abstract partial class RarReader : AbstractReader<RarReaderEntry, RarVolu
 {
     private bool _disposed;
     private RarVolume? volume;
-    private Lazy<IRarUnpack> UnpackV2017 { get; } =
-        new(() => new Compressors.Rar.UnpackV2017.Unpack());
-    private Lazy<IRarUnpack> UnpackV1 { get; } = new(() => new Compressors.Rar.UnpackV1.Unpack());
+    private Lazy<IRarUnpack> UnpackV2017 { get; }
+    private Lazy<IRarUnpack> UnpackV1 { get; }
 
     internal RarReader(ReaderOptions options)
-        : base(options, ArchiveType.Rar) { }
+        : base(options, ArchiveType.Rar)
+    {
+        UnpackV2017 = new(() => new Compressors.Rar.UnpackV2017.Unpack(options.MaxDecoderMemory));
+        UnpackV1 = new(() => new Compressors.Rar.UnpackV1.Unpack(options.MaxDecoderMemory));
+    }
 
     public override void Dispose()
     {

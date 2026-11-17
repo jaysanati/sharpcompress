@@ -21,7 +21,7 @@ internal partial class BitInput
 
             // Ensure that we get predictable results when accessing bytes in area
             // not filled with read data.
-            //memset(InBuf,0,BufSize);
+            System.Array.Clear(InBuf, 0, InBuf.Length);
         }
         else
         {

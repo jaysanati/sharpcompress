@@ -476,7 +476,8 @@ internal partial class Unpack
             // and trees earlier than data in input buffer ends.
             ReadBorder = Math.Min(ReadBorder, BlockHeader.BlockStart + BlockHeader.BlockSize - 1);
         }
-        return ReadCode != -1;
+        Array.Clear(Inp.InBuf, ReadTop, Inp.InBuf.Length - ReadTop);
+        return ReadCode > 0 || Inp.InAddr < ReadTop;
     }
 
     //?

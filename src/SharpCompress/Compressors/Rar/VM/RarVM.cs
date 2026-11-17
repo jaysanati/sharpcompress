@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using SharpCompress.Common;
 
 namespace SharpCompress.Compressors.Rar.VM;
 
@@ -39,20 +40,11 @@ internal sealed class RarVM : BitInput
         new(29, 0x0e06077d, VMStandardFilters.VMSF_DELTA),
         new(149, 0x1c2c5dc8, VMStandardFilters.VMSF_RGB),
         new(216, 0xbc85e701, VMStandardFilters.VMSF_AUDIO),
-        new(40, 0x46b9c560, VMStandardFilters.VMSF_UPCASE),
     };
 
     private readonly int[] R = new int[regCount];
 
-    private VMFlags flags;
-
-    private int maxOpCount = 25000000;
-
-    private int codeSize;
-
-    private int IP;
-
-    internal RarVM() { }
+    internal RarVM() => Array.Clear(Mem, 0, Mem.Length);
 
     public override void Dispose()
     {
@@ -121,969 +113,68 @@ internal sealed class RarVM : BitInput
         mem[offset + 3] = (byte)(Utility.URShift(value, 24) & 0xff);
     }
 
-    private int GetOperand(VMPreparedOperand cmdOp)
-    {
-        var ret = 0;
-        if (cmdOp.Type == VMOpType.VM_OPREGMEM)
-        {
-            var pos = (cmdOp.Offset + cmdOp.Base) & VM_MEMMASK;
-            ret = BinaryPrimitives.ReadInt32LittleEndian(Mem.AsSpan(pos));
-        }
-        else
-        {
-            var pos = cmdOp.Offset;
-            ret = BinaryPrimitives.ReadInt32LittleEndian(Mem.AsSpan(pos));
-        }
-        return ret;
-    }
-
     public void execute(VMPreparedProgram prg)
     {
-        for (var i = 0; i < prg.InitR.Length; i++)
-        // memcpy(R,Prg->InitR,sizeof(Prg->InitR));
+        Array.Copy(prg.InitR, R, prg.InitR.Length);
+        var size = R[4];
+        if ((uint)size > VM_MEMSIZE)
         {
-            R[i] = prg.InitR[i];
+            throw new InvalidFormatException("Invalid RAR filter block length.");
         }
-
-        var globalSize = Math.Min(prg.GlobalData.Count, VM_GLOBALMEMSIZE) & 0xffFFffFF;
-        if (globalSize != 0)
+        var separateOutput =
+            prg.Type
+            is VMStandardFilters.VMSF_DELTA
+                or VMStandardFilters.VMSF_RGB
+                or VMStandardFilters.VMSF_AUDIO;
+        if (separateOutput && size > VM_MEMSIZE / 2)
         {
-            for (var i = 0; i < globalSize; i++)
-            // memcpy(Mem+VM_GLOBALMEMADDR,&Prg->GlobalData[0],GlobalSize);
-            {
-                Mem[VM_GLOBALMEMADDR + i] = prg.GlobalData[i];
-            }
+            throw new InvalidFormatException("Invalid RAR filter output length.");
         }
-        var staticSize = Math.Min(prg.StaticData.Count, VM_GLOBALMEMSIZE - globalSize) & 0xffFFffFF;
-        if (staticSize != 0)
+        if (
+            prg.Type is VMStandardFilters.VMSF_DELTA or VMStandardFilters.VMSF_AUDIO
+            && (R[0] <= 0 || R[0] > 1024)
+        )
         {
-            for (var i = 0; i < staticSize; i++)
-            // memcpy(Mem+VM_GLOBALMEMADDR+GlobalSize,&Prg->StaticData[0],StaticSize);
-            {
-                Mem[VM_GLOBALMEMADDR + (int)globalSize + i] = prg.StaticData[i];
-            }
+            throw new InvalidFormatException("Invalid RAR filter channel count.");
         }
-        R[7] = VM_MEMSIZE;
-        flags = 0;
-
-        //UPGRADE_NOTE: There is an untranslated Statement.  Please refer to original code. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1153'"
-        var preparedCode = prg.AltCommands.Count != 0 ? prg.AltCommands : prg.Commands;
-
-        if (!ExecuteCode(preparedCode, prg.CommandCount))
+        if (
+            prg.Type == VMStandardFilters.VMSF_RGB
+            && (size < 3 || (uint)(R[0] - 3) > size || (uint)R[1] > 2)
+        )
         {
-            preparedCode[0].OpCode = VMCommands.VM_RET;
+            throw new InvalidFormatException("Invalid RAR RGB filter width or position.");
         }
-        var newBlockPos = GetValue(false, Mem, VM_GLOBALMEMADDR + 0x20) & VM_MEMMASK;
-        var newBlockSize = GetValue(false, Mem, VM_GLOBALMEMADDR + 0x1c) & VM_MEMMASK;
-        if ((newBlockPos + newBlockSize) >= VM_MEMSIZE)
+        if (prg.Type == VMStandardFilters.VMSF_NONE)
         {
-            newBlockPos = 0;
-            newBlockSize = 0;
+            throw new InvalidFormatException("Unsupported RAR VM program.");
         }
-
-        prg.FilteredDataOffset = newBlockPos;
-        prg.FilteredDataSize = newBlockSize;
-
-        prg.GlobalData.Clear();
-
-        var dataSize = Math.Min(
-            GetValue(false, Mem, VM_GLOBALMEMADDR + 0x30),
-            VM_GLOBALMEMSIZE - VM_FIXEDGLOBALSIZE
-        );
-        if (dataSize != 0)
+        if (prg.Type == VMStandardFilters.VMSF_RGB)
         {
-            //prg.GlobalData.Clear();
-            // ->GlobalData.Add(dataSize+VM_FIXEDGLOBALSIZE);
-            prg.GlobalData.Capacity = dataSize + VM_FIXEDGLOBALSIZE;
-            for (var i = 0; i < dataSize + VM_FIXEDGLOBALSIZE; i++)
-            // memcpy(&Prg->GlobalData[0],&Mem[VM_GLOBALMEMADDR],DataSize+VM_FIXEDGLOBALSIZE);
-            {
-                prg.GlobalData.Add(Mem[VM_GLOBALMEMADDR + i]);
-            }
+            // Very narrow RGB rows can predict from not-yet-written output.
+            // Do not let those reads depend on a preceding filter or entry.
+            Array.Clear(Mem, size, size);
         }
-    }
-
-    private bool setIP(int ip)
-    {
-        if ((ip) >= codeSize)
-        {
-            return (true);
-        }
-
-        if (--maxOpCount <= 0)
-        {
-            return (false);
-        }
-
-        IP = ip;
-        return true;
-    }
-
-    private bool ExecuteCode(List<VMPreparedCommand> preparedCode, int cmdCount)
-    {
-        maxOpCount = 25000000;
-        codeSize = cmdCount;
-        IP = 0;
-
-        while (true)
-        {
-            var cmd = preparedCode[IP];
-            var op1 = GetOperand(cmd.Op1);
-            var op2 = GetOperand(cmd.Op2);
-            switch (cmd.OpCode)
-            {
-                case VMCommands.VM_MOV:
-                    SetValue(cmd.IsByteMode, Mem, op1, GetValue(cmd.IsByteMode, Mem, op2));
-
-                    // SET_VALUE(Cmd->ByteMode,Op1,GET_VALUE(Cmd->ByteMode,Op2));
-                    break;
-
-                case VMCommands.VM_MOVB:
-                    SetValue(true, Mem, op1, GetValue(true, Mem, op2));
-                    break;
-
-                case VMCommands.VM_MOVD:
-                    SetValue(false, Mem, op1, GetValue(false, Mem, op2));
-                    break;
-
-                case VMCommands.VM_CMP:
-                    {
-                        var value1 = (VMFlags)GetValue(cmd.IsByteMode, Mem, op1);
-                        var result = value1 - GetValue(cmd.IsByteMode, Mem, op2);
-
-                        if (result == 0)
-                        {
-                            flags = VMFlags.VM_FZ;
-                        }
-                        else
-                        {
-                            flags = (VMFlags)(
-                                (result > value1) ? 1 : 0 | (int)(result & VMFlags.VM_FS)
-                            );
-                        }
-                    }
-                    break;
-
-                case VMCommands.VM_CMPB:
-                    {
-                        var value1 = (VMFlags)GetValue(true, Mem, op1);
-                        var result = value1 - GetValue(true, Mem, op2);
-                        if (result == 0)
-                        {
-                            flags = VMFlags.VM_FZ;
-                        }
-                        else
-                        {
-                            flags = (VMFlags)(
-                                (result > value1) ? 1 : 0 | (int)(result & VMFlags.VM_FS)
-                            );
-                        }
-                    }
-                    break;
-
-                case VMCommands.VM_CMPD:
-                    {
-                        var value1 = (VMFlags)GetValue(false, Mem, op1);
-                        var result = value1 - GetValue(false, Mem, op2);
-                        if (result == 0)
-                        {
-                            flags = VMFlags.VM_FZ;
-                        }
-                        else
-                        {
-                            flags = (VMFlags)(
-                                (result > value1) ? 1 : 0 | (int)(result & VMFlags.VM_FS)
-                            );
-                        }
-                    }
-                    break;
-
-                case VMCommands.VM_ADD:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        var result = (int)(
-                            ((value1 + (long)GetValue(cmd.IsByteMode, Mem, op2)))
-                            & unchecked((int)0xffffffff)
-                        );
-                        if (cmd.IsByteMode)
-                        {
-                            result &= 0xff;
-                            flags = (VMFlags)(
-                                (result < value1)
-                                    ? 1
-                                    : 0
-                                        | (
-                                            result == 0
-                                                ? (int)VMFlags.VM_FZ
-                                                : (((result & 0x80) != 0) ? (int)VMFlags.VM_FS : 0)
-                                        )
-                            );
-
-                            // Flags=(Result<Value1)|(Result==0 ? VM_FZ:((Result&0x80) ?
-                            // VM_FS:0));
-                        }
-                        else
-                        {
-                            flags = (VMFlags)(
-                                (result < value1)
-                                    ? 1
-                                    : 0
-                                        | (
-                                            result == 0
-                                                ? (int)VMFlags.VM_FZ
-                                                : (result & (int)VMFlags.VM_FS)
-                                        )
-                            );
-                        }
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_ADDB:
-                    SetValue(
-                        true,
-                        Mem,
-                        op1,
-                        (int)(
-                            GetValue(true, Mem, op1)
-                            & (0xFFffFFff + GetValue(true, Mem, op2))
-                            & unchecked((int)0xFFffFFff)
-                        )
-                    );
-                    break;
-
-                case VMCommands.VM_ADDD:
-                    SetValue(
-                        false,
-                        Mem,
-                        op1,
-                        (int)(
-                            GetValue(false, Mem, op1)
-                            & (0xFFffFFff + GetValue(false, Mem, op2))
-                            & unchecked((int)0xFFffFFff)
-                        )
-                    );
-                    break;
-
-                case VMCommands.VM_SUB:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        var result = (int)(
-                            value1
-                            & (0xffFFffFF - GetValue(cmd.IsByteMode, Mem, op2))
-                            & unchecked((int)0xFFffFFff)
-                        );
-                        flags = (VMFlags)(
-                            (result == 0)
-                                ? (int)VMFlags.VM_FZ
-                                : ((result > value1) ? 1 : 0 | (result & (int)VMFlags.VM_FS))
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result); // (Cmd->ByteMode,Op1,Result);
-                    }
-                    break;
-
-                case VMCommands.VM_SUBB:
-                    SetValue(
-                        true,
-                        Mem,
-                        op1,
-                        (int)(
-                            GetValue(true, Mem, op1)
-                            & (0xFFffFFff - GetValue(true, Mem, op2))
-                            & unchecked((int)0xFFffFFff)
-                        )
-                    );
-                    break;
-
-                case VMCommands.VM_SUBD:
-                    SetValue(
-                        false,
-                        Mem,
-                        op1,
-                        (int)(
-                            GetValue(false, Mem, op1)
-                            & (0xFFffFFff - GetValue(false, Mem, op2))
-                            & unchecked((int)0xFFffFFff)
-                        )
-                    );
-                    break;
-
-                case VMCommands.VM_JZ:
-                    if ((flags & VMFlags.VM_FZ) != 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_JNZ:
-                    if ((flags & VMFlags.VM_FZ) == 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_INC:
-                    {
-                        var result = (int)(GetValue(cmd.IsByteMode, Mem, op1) & (0xFFffFFffL + 1L));
-                        if (cmd.IsByteMode)
-                        {
-                            result &= 0xff;
-                        }
-
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                        flags = (VMFlags)(
-                            result == 0 ? (int)VMFlags.VM_FZ : result & (int)VMFlags.VM_FS
-                        );
-                    }
-                    break;
-
-                case VMCommands.VM_INCB:
-                    SetValue(true, Mem, op1, (int)(GetValue(true, Mem, op1) & (0xFFffFFffL + 1L)));
-                    break;
-
-                case VMCommands.VM_INCD:
-                    SetValue(
-                        false,
-                        Mem,
-                        op1,
-                        (int)(GetValue(false, Mem, op1) & (0xFFffFFffL + 1L))
-                    );
-                    break;
-
-                case VMCommands.VM_DEC:
-                    {
-                        var result = (int)(GetValue(cmd.IsByteMode, Mem, op1) & (0xFFffFFff - 1));
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                        flags = (VMFlags)(
-                            result == 0 ? (int)VMFlags.VM_FZ : result & (int)VMFlags.VM_FS
-                        );
-                    }
-                    break;
-
-                case VMCommands.VM_DECB:
-                    SetValue(true, Mem, op1, (int)(GetValue(true, Mem, op1) & (0xFFffFFff - 1)));
-                    break;
-
-                case VMCommands.VM_DECD:
-                    SetValue(false, Mem, op1, (int)(GetValue(false, Mem, op1) & (0xFFffFFff - 1)));
-                    break;
-
-                case VMCommands.VM_JMP:
-                    setIP(GetValue(false, Mem, op1));
-                    continue;
-
-                case VMCommands.VM_XOR:
-                    {
-                        var result =
-                            GetValue(cmd.IsByteMode, Mem, op1) ^ GetValue(cmd.IsByteMode, Mem, op2);
-                        flags = (VMFlags)(
-                            result == 0 ? (int)VMFlags.VM_FZ : result & (int)VMFlags.VM_FS
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_AND:
-                    {
-                        var result =
-                            GetValue(cmd.IsByteMode, Mem, op1) & GetValue(cmd.IsByteMode, Mem, op2);
-                        flags = (VMFlags)(
-                            result == 0 ? (int)VMFlags.VM_FZ : result & (int)VMFlags.VM_FS
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_OR:
-                    {
-                        var result =
-                            GetValue(cmd.IsByteMode, Mem, op1) | GetValue(cmd.IsByteMode, Mem, op2);
-                        flags = (VMFlags)(
-                            result == 0 ? (int)VMFlags.VM_FZ : result & (int)VMFlags.VM_FS
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_TEST:
-                    {
-                        var result =
-                            GetValue(cmd.IsByteMode, Mem, op1) & GetValue(cmd.IsByteMode, Mem, op2);
-                        flags = (VMFlags)(
-                            result == 0 ? (int)VMFlags.VM_FZ : result & (int)VMFlags.VM_FS
-                        );
-                    }
-                    break;
-
-                case VMCommands.VM_JS:
-                    if ((flags & VMFlags.VM_FS) != 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_JNS:
-                    if ((flags & VMFlags.VM_FS) == 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_JB:
-                    if ((flags & VMFlags.VM_FC) != 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_JBE:
-                    if ((flags & (VMFlags.VM_FC | VMFlags.VM_FZ)) != 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_JA:
-                    if ((flags & (VMFlags.VM_FC | VMFlags.VM_FZ)) == 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_JAE:
-                    if ((flags & VMFlags.VM_FC) == 0)
-                    {
-                        setIP(GetValue(false, Mem, op1));
-                        continue;
-                    }
-                    break;
-
-                case VMCommands.VM_PUSH:
-                    R[7] -= 4;
-                    SetValue(false, Mem, R[7] & VM_MEMMASK, GetValue(false, Mem, op1));
-                    break;
-
-                case VMCommands.VM_POP:
-                    SetValue(false, Mem, op1, GetValue(false, Mem, R[7] & VM_MEMMASK));
-                    R[7] += 4;
-                    break;
-
-                case VMCommands.VM_CALL:
-                    R[7] -= 4;
-                    SetValue(false, Mem, R[7] & VM_MEMMASK, IP + 1);
-                    setIP(GetValue(false, Mem, op1));
-                    continue;
-
-                case VMCommands.VM_NOT:
-                    SetValue(cmd.IsByteMode, Mem, op1, ~GetValue(cmd.IsByteMode, Mem, op1));
-                    break;
-
-                case VMCommands.VM_SHL:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        var value2 = GetValue(cmd.IsByteMode, Mem, op2);
-                        var result = value1 << value2;
-                        flags = (VMFlags)(
-                            (result == 0 ? (int)VMFlags.VM_FZ : (result & (int)VMFlags.VM_FS))
-                            | (
-                                ((value1 << (value2 - 1)) & unchecked((int)0x80000000)) != 0
-                                    ? (int)VMFlags.VM_FC
-                                    : 0
-                            )
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_SHR:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        var value2 = GetValue(cmd.IsByteMode, Mem, op2);
-                        var result = Utility.URShift(value1, value2);
-                        flags = (VMFlags)(
-                            (result == 0 ? (int)VMFlags.VM_FZ : (result & (int)VMFlags.VM_FS))
-                            | ((Utility.URShift(value1, (value2 - 1))) & (int)VMFlags.VM_FC)
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_SAR:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        var value2 = GetValue(cmd.IsByteMode, Mem, op2);
-                        var result = value1 >> value2;
-                        flags = (VMFlags)(
-                            (result == 0 ? (int)VMFlags.VM_FZ : (result & (int)VMFlags.VM_FS))
-                            | ((value1 >> (value2 - 1)) & (int)VMFlags.VM_FC)
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_NEG:
-                    {
-                        var result = -GetValue(cmd.IsByteMode, Mem, op1);
-                        flags = (VMFlags)(
-                            result == 0
-                                ? (int)VMFlags.VM_FZ
-                                : (int)VMFlags.VM_FC | (result & (int)VMFlags.VM_FS)
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_NEGB:
-                    SetValue(true, Mem, op1, -GetValue(true, Mem, op1));
-                    break;
-
-                case VMCommands.VM_NEGD:
-                    SetValue(false, Mem, op1, -GetValue(false, Mem, op1));
-                    break;
-
-                case VMCommands.VM_PUSHA:
-                    {
-                        for (int i = 0, SP = R[7] - 4; i < regCount; i++, SP -= 4)
-                        {
-                            SetValue(false, Mem, SP & VM_MEMMASK, R[i]);
-                        }
-                        R[7] -= regCount * 4;
-                    }
-                    break;
-
-                case VMCommands.VM_POPA:
-                    {
-                        for (int i = 0, SP = R[7]; i < regCount; i++, SP += 4)
-                        {
-                            R[7 - i] = GetValue(false, Mem, SP & VM_MEMMASK);
-                        }
-                    }
-                    break;
-
-                case VMCommands.VM_PUSHF:
-                    R[7] -= 4;
-                    SetValue(false, Mem, R[7] & VM_MEMMASK, (int)flags);
-                    break;
-
-                case VMCommands.VM_POPF:
-                    flags = (VMFlags)GetValue(false, Mem, R[7] & VM_MEMMASK);
-                    R[7] += 4;
-                    break;
-
-                case VMCommands.VM_MOVZX:
-                    SetValue(false, Mem, op1, GetValue(true, Mem, op2));
-                    break;
-
-                case VMCommands.VM_MOVSX:
-                    SetValue(false, Mem, op1, (byte)GetValue(true, Mem, op2));
-                    break;
-
-                case VMCommands.VM_XCHG:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        SetValue(cmd.IsByteMode, Mem, op1, GetValue(cmd.IsByteMode, Mem, op2));
-                        SetValue(cmd.IsByteMode, Mem, op2, value1);
-                    }
-                    break;
-
-                case VMCommands.VM_MUL:
-                    {
-                        var result = (int)(
-                            (
-                                GetValue(cmd.IsByteMode, Mem, op1)
-                                & (0xFFffFFff * GetValue(cmd.IsByteMode, Mem, op2))
-                                & unchecked((int)0xFFffFFff)
-                            ) & unchecked((int)0xFFffFFff)
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_DIV:
-                    {
-                        var divider = GetValue(cmd.IsByteMode, Mem, op2);
-                        if (divider != 0)
-                        {
-                            var result = GetValue(cmd.IsByteMode, Mem, op1) / divider;
-                            SetValue(cmd.IsByteMode, Mem, op1, result);
-                        }
-                    }
-                    break;
-
-                case VMCommands.VM_ADC:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        var FC = (int)(flags & VMFlags.VM_FC);
-                        var result = (int)(
-                            value1
-                            & (0xFFffFFff + GetValue(cmd.IsByteMode, Mem, op2))
-                            & (0xFFffFFff + FC)
-                            & unchecked((int)0xFFffFFff)
-                        );
-                        if (cmd.IsByteMode)
-                        {
-                            result &= 0xff;
-                        }
-
-                        flags = (VMFlags)(
-                            (result < value1 || result == value1 && FC != 0)
-                                ? 1
-                                : 0
-                                    | (
-                                        result == 0
-                                            ? (int)VMFlags.VM_FZ
-                                            : (result & (int)VMFlags.VM_FS)
-                                    )
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_SBB:
-                    {
-                        var value1 = GetValue(cmd.IsByteMode, Mem, op1);
-                        var FC = (int)(flags & VMFlags.VM_FC);
-                        var result = (int)(
-                            value1
-                            & (0xFFffFFff - GetValue(cmd.IsByteMode, Mem, op2))
-                            & (0xFFffFFff - FC)
-                            & unchecked((int)0xFFffFFff)
-                        );
-                        if (cmd.IsByteMode)
-                        {
-                            result &= 0xff;
-                        }
-                        flags = (VMFlags)(
-                            (result > value1 || result == value1 && FC != 0)
-                                ? 1
-                                : 0
-                                    | (
-                                        result == 0
-                                            ? (int)VMFlags.VM_FZ
-                                            : (result & (int)VMFlags.VM_FS)
-                                    )
-                        );
-                        SetValue(cmd.IsByteMode, Mem, op1, result);
-                    }
-                    break;
-
-                case VMCommands.VM_RET:
-                    if (R[7] >= VM_MEMSIZE)
-                    {
-                        return (true);
-                    }
-                    setIP(GetValue(false, Mem, R[7] & VM_MEMMASK));
-                    R[7] += 4;
-                    continue;
-
-                case VMCommands.VM_STANDARD:
-                    ExecuteStandardFilter((VMStandardFilters)(cmd.Op1.Data));
-                    break;
-
-                case VMCommands.VM_PRINT:
-                    break;
-            }
-            IP++;
-            --maxOpCount;
-        }
+        ExecuteStandardFilter(prg.Type);
+        prg.FilteredDataOffset = separateOutput ? size : 0;
+        prg.FilteredDataSize = size;
     }
 
     public void prepare(ReadOnlySpan<byte> code, VMPreparedProgram prg)
     {
-        InitBitInput();
-        var codeSize = code.Length;
-        var cpLength = Math.Min(MAX_SIZE, codeSize);
-
-        // memcpy(inBuf,Code,Min(CodeSize,BitInput::MAX_SIZE));
-
-        code.Slice(0, cpLength).CopyTo(InBuf);
-        byte xorSum = 0;
-        for (var i = 1; i < codeSize; i++)
+        // UnRAR 5.5 and later recognize standard filters only. Never interpret
+        // archive-supplied instructions or operand addresses.
+        byte checksum = 0;
+        for (var i = 1; i < code.Length; i++)
         {
-            xorSum ^= code[i];
+            checksum ^= code[i];
         }
-
-        AddBits(8);
-
-        prg.CommandCount = 0;
-        if (xorSum == code[0])
+        prg.Type =
+            code.Length > 0 && checksum == code[0]
+                ? IsStandardFilter(code)
+                : VMStandardFilters.VMSF_NONE;
+        if (prg.Type == VMStandardFilters.VMSF_NONE)
         {
-            var filterType = IsStandardFilter(code);
-            if (filterType != VMStandardFilters.VMSF_NONE)
-            {
-                var curCmd = new VMPreparedCommand();
-                curCmd.OpCode = VMCommands.VM_STANDARD;
-                curCmd.Op1.Data = (int)filterType;
-                curCmd.Op1.Type = VMOpType.VM_OPNONE;
-                curCmd.Op2.Type = VMOpType.VM_OPNONE;
-                codeSize = 0;
-                prg.Commands.Add(curCmd);
-                prg.CommandCount++;
-
-                // TODO
-                // curCmd->Op1.Data=FilterType;
-                // >>>>>> CurCmd->Op1.Addr=&CurCmd->Op1.Data; <<<<<<<<<< not set
-                // do i need to ?
-                // >>>>>> CurCmd->Op2.Addr=&CurCmd->Op2.Data; <<<<<<<<<< "
-                // CurCmd->Op1.Type=CurCmd->Op2.Type=VM_OPNONE;
-                // CodeSize=0;
-            }
-            var dataFlag = GetBits();
-            AddBits(1);
-
-            // Read static data contained in DB operators. This data cannot be
-            // changed,
-            // it is a part of VM code, not a filter parameter.
-
-            if ((dataFlag & 0x8000) != 0)
-            {
-                var dataSize = ReadData(this) & (0xffFFffFFL + 1L);
-                for (var i = 0; inAddr < codeSize && i < dataSize; i++)
-                {
-                    prg.StaticData.Add((byte)(GetBits() >> 8));
-                    AddBits(8);
-                }
-            }
-
-            while (inAddr < codeSize)
-            {
-                var curCmd = new VMPreparedCommand();
-                var data = GetBits();
-                if ((data & 0x8000) == 0)
-                {
-                    curCmd.OpCode = (VMCommands)((data >> 12));
-                    AddBits(4);
-                }
-                else
-                {
-                    curCmd.OpCode = (VMCommands)((data >> 10) - 24);
-                    AddBits(6);
-                }
-                if ((VMCmdFlags.VM_CmdFlags[(int)curCmd.OpCode] & VMCmdFlags.VMCF_BYTEMODE) != 0)
-                {
-                    curCmd.IsByteMode = (GetBits() >> 15) == 1;
-                    AddBits(1);
-                }
-                else
-                {
-                    curCmd.IsByteMode = false;
-                }
-                curCmd.Op1.Type = VMOpType.VM_OPNONE;
-                curCmd.Op2.Type = VMOpType.VM_OPNONE;
-
-                var opNum = (VMCmdFlags.VM_CmdFlags[(int)curCmd.OpCode] & VMCmdFlags.VMCF_OPMASK);
-
-                // TODO >>> CurCmd->Op1.Addr=CurCmd->Op2.Addr=NULL; <<<???
-                if (opNum > 0)
-                {
-                    decodeArg(curCmd.Op1, curCmd.IsByteMode);
-                    if (opNum == 2)
-                    {
-                        decodeArg(curCmd.Op2, curCmd.IsByteMode);
-                    }
-                    else
-                    {
-                        if (
-                            curCmd.Op1.Type == VMOpType.VM_OPINT
-                            && (
-                                VMCmdFlags.VM_CmdFlags[(int)curCmd.OpCode]
-                                & (VMCmdFlags.VMCF_JUMP | VMCmdFlags.VMCF_PROC)
-                            ) != 0
-                        )
-                        {
-                            var distance = curCmd.Op1.Data;
-                            if (distance >= 256)
-                            {
-                                distance -= 256;
-                            }
-                            else
-                            {
-                                if (distance >= 136)
-                                {
-                                    distance -= 264;
-                                }
-                                else
-                                {
-                                    if (distance >= 16)
-                                    {
-                                        distance -= 8;
-                                    }
-                                    else
-                                    {
-                                        if (distance >= 8)
-                                        {
-                                            distance -= 16;
-                                        }
-                                    }
-                                }
-                                distance += prg.CommandCount;
-                            }
-                            curCmd.Op1.Data = distance;
-                        }
-                    }
-                }
-                prg.CommandCount++;
-                prg.Commands.Add(curCmd);
-            }
-        }
-        var curCmd2 = new VMPreparedCommand();
-        curCmd2.OpCode = VMCommands.VM_RET;
-
-        // TODO CurCmd->Op1.Addr=&CurCmd->Op1.Data;
-        // CurCmd->Op2.Addr=&CurCmd->Op2.Data;
-        curCmd2.Op1.Type = VMOpType.VM_OPNONE;
-        curCmd2.Op2.Type = VMOpType.VM_OPNONE;
-
-        // for (int i=0;i<prg.CmdCount;i++)
-        // {
-        // VM_PreparedCommand *Cmd=&Prg->Cmd[I];
-        // if (Cmd->Op1.Addr==NULL)
-        // Cmd->Op1.Addr=&Cmd->Op1.Data;
-        // if (Cmd->Op2.Addr==NULL)
-        // Cmd->Op2.Addr=&Cmd->Op2.Data;
-        // }
-
-        prg.Commands.Add(curCmd2);
-        prg.CommandCount++;
-
-        // #ifdef VM_OPTIMIZE
-        if (codeSize != 0)
-        {
-            optimize(prg);
-        }
-    }
-
-    private void decodeArg(VMPreparedOperand op, bool byteMode)
-    {
-        var data = GetBits();
-        if ((data & 0x8000) != 0)
-        {
-            op.Type = VMOpType.VM_OPREG;
-            op.Data = (data >> 12) & 7;
-            op.Offset = op.Data;
-            AddBits(4);
-        }
-        else
-        {
-            if ((data & 0xc000) == 0)
-            {
-                op.Type = VMOpType.VM_OPINT;
-                if (byteMode)
-                {
-                    op.Data = (data >> 6) & 0xff;
-                    AddBits(10);
-                }
-                else
-                {
-                    AddBits(2);
-                    op.Data = ReadData(this);
-                }
-            }
-            else
-            {
-                op.Type = VMOpType.VM_OPREGMEM;
-                if ((data & 0x2000) == 0)
-                {
-                    op.Data = (data >> 10) & 7;
-                    op.Offset = op.Data;
-                    op.Base = 0;
-                    AddBits(6);
-                }
-                else
-                {
-                    if ((data & 0x1000) == 0)
-                    {
-                        op.Data = (data >> 9) & 7;
-                        op.Offset = op.Data;
-                        AddBits(7);
-                    }
-                    else
-                    {
-                        op.Data = 0;
-                        AddBits(4);
-                    }
-                    op.Base = ReadData(this);
-                }
-            }
-        }
-    }
-
-    private void optimize(VMPreparedProgram prg)
-    {
-        //UPGRADE_NOTE: There is an untranslated Statement.  Please refer to original code. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1153'"
-
-        var commands = prg.Commands;
-
-        //UPGRADE_ISSUE: The following fragment of code could not be parsed and was not converted. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1156'"
-        foreach (var cmd in commands)
-        {
-            switch (cmd.OpCode)
-            {
-                case VMCommands.VM_MOV:
-                    cmd.OpCode = cmd.IsByteMode ? VMCommands.VM_MOVB : VMCommands.VM_MOVD;
-                    continue;
-
-                case VMCommands.VM_CMP:
-                    cmd.OpCode = cmd.IsByteMode ? VMCommands.VM_CMPB : VMCommands.VM_CMPD;
-                    continue;
-            }
-            if ((VMCmdFlags.VM_CmdFlags[(int)cmd.OpCode] & VMCmdFlags.VMCF_CHFLAGS) == 0)
-            {
-                continue;
-            }
-            var flagsRequired = false;
-
-            for (var i = commands.IndexOf(cmd) + 1; i < commands.Count; i++)
-            {
-                int flags = VMCmdFlags.VM_CmdFlags[(int)commands[i].OpCode];
-                if (
-                    (
-                        flags
-                        & (VMCmdFlags.VMCF_JUMP | VMCmdFlags.VMCF_PROC | VMCmdFlags.VMCF_USEFLAGS)
-                    ) != 0
-                )
-                {
-                    flagsRequired = true;
-                    break;
-                }
-                if ((flags & VMCmdFlags.VMCF_CHFLAGS) != 0)
-                {
-                    break;
-                }
-            }
-            if (flagsRequired)
-            {
-                continue;
-            }
-            switch (cmd.OpCode)
-            {
-                case VMCommands.VM_ADD:
-                    cmd.OpCode = cmd.IsByteMode ? VMCommands.VM_ADDB : VMCommands.VM_ADDD;
-                    continue;
-
-                case VMCommands.VM_SUB:
-                    cmd.OpCode = cmd.IsByteMode ? VMCommands.VM_SUBB : VMCommands.VM_SUBD;
-                    continue;
-
-                case VMCommands.VM_INC:
-                    cmd.OpCode = cmd.IsByteMode ? VMCommands.VM_INCB : VMCommands.VM_INCD;
-                    continue;
-
-                case VMCommands.VM_DEC:
-                    cmd.OpCode = cmd.IsByteMode ? VMCommands.VM_DECB : VMCommands.VM_DECD;
-                    continue;
-
-                case VMCommands.VM_NEG:
-                    cmd.OpCode = cmd.IsByteMode ? VMCommands.VM_NEGB : VMCommands.VM_NEGD;
-                    continue;
-            }
+            throw new InvalidFormatException("Unsupported RAR VM program.");
         }
     }
 
@@ -1152,7 +243,7 @@ internal sealed class RarVM : BitInput
                     var dataSize = R[4];
                     long fileOffset = R[6] & unchecked((int)0xFFffFFff);
 
-                    if (dataSize >= VM_GLOBALMEMADDR)
+                    if (dataSize > VM_MEMSIZE)
                     {
                         break;
                     }
@@ -1206,7 +297,7 @@ internal sealed class RarVM : BitInput
                     var dataSize = R[4];
                     long fileOffset = R[6] & unchecked((int)0xFFffFFff);
 
-                    if (dataSize >= VM_GLOBALMEMADDR)
+                    if (dataSize > VM_MEMSIZE)
                     {
                         break;
                     }
@@ -1264,8 +355,7 @@ internal sealed class RarVM : BitInput
                     var channels = R[0] & unchecked((int)0xFFffFFff);
                     var srcPos = 0;
                     var border = (dataSize * 2) & unchecked((int)0xFFffFFff);
-                    SetValue(false, mem, VM_GLOBALMEMADDR + 0x20, dataSize);
-                    if (dataSize >= VM_GLOBALMEMADDR / 2)
+                    if (dataSize > VM_MEMSIZE / 2)
                     {
                         break;
                     }
@@ -1297,8 +387,7 @@ internal sealed class RarVM : BitInput
                     var channels = 3;
                     var srcPos = 0;
                     var destDataPos = dataSize;
-                    SetValue(false, mem, VM_GLOBALMEMADDR + 0x20, dataSize);
-                    if (dataSize >= VM_GLOBALMEMADDR / 2 || posR < 0)
+                    if (dataSize > VM_MEMSIZE / 2 || posR < 0)
                     {
                         break;
                     }
@@ -1361,8 +450,7 @@ internal sealed class RarVM : BitInput
                     var destDataPos = dataSize;
 
                     //byte *SrcData=Mem,*DestData=SrcData+DataSize;
-                    SetValue(false, mem, VM_GLOBALMEMADDR + 0x20, dataSize);
-                    if (dataSize >= VM_GLOBALMEMADDR / 2)
+                    if (dataSize > VM_MEMSIZE / 2)
                     {
                         break;
                     }
@@ -1480,29 +568,6 @@ internal sealed class RarVM : BitInput
                             }
                         }
                     }
-                }
-                break;
-
-            case VMStandardFilters.VMSF_UPCASE:
-                {
-                    int dataSize = R[4],
-                        srcPos = 0,
-                        destPos = dataSize;
-                    if (dataSize >= VM_GLOBALMEMADDR / 2)
-                    {
-                        break;
-                    }
-                    while (srcPos < dataSize)
-                    {
-                        var curByte = mem[srcPos++];
-                        if (curByte == 2 && (curByte = mem[srcPos++]) != 2)
-                        {
-                            curByte = (byte)(curByte - 32);
-                        }
-                        mem[destPos++] = curByte;
-                    }
-                    SetValue(false, mem, VM_GLOBALMEMADDR + 0x1c, destPos - dataSize);
-                    SetValue(false, mem, VM_GLOBALMEMADDR + 0x20, dataSize);
                 }
                 break;
         }

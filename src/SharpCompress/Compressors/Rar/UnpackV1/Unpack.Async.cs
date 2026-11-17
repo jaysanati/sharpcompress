@@ -22,11 +22,13 @@ internal sealed partial class Unpack
     )
     {
         destUnpSize = fileHeader.UncompressedSize;
+        oldWrittenSize = 0;
         this.fileHeader = fileHeader;
         this.readStream = readStream;
         this.writeStream = writeStream;
-        if (!fileHeader.IsSolid)
+        if (!fileHeader.IsSolid || window is null)
         {
+            firstWindowDone = false;
             if (fileHeader.IsStored)
             {
                 ReleaseWindow();
@@ -138,6 +140,7 @@ internal sealed partial class Unpack
                 && !await ReadTablesAsync(cancellationToken).ConfigureAwait(false)
             )
             {
+                ppmError = unpBlockType == BlockTypes.BLOCK_PPM;
                 return;
             }
         }
@@ -149,6 +152,7 @@ internal sealed partial class Unpack
 
         while (true)
         {
+            firstWindowDone |= unpPtr >= PackDef.MAXWINSIZE;
             unpPtr &= PackDef.MAXWINMASK;
 
             if (inAddr > readBorder)
@@ -159,7 +163,7 @@ internal sealed partial class Unpack
                 }
             }
 
-            if (((wrPtr - unpPtr) & PackDef.MAXWINMASK) < 260 && wrPtr != unpPtr)
+            if (((wrPtr - unpPtr) & PackDef.MAXWINMASK) < 288 && wrPtr != unpPtr)
             {
                 await UnpWriteBufAsync(cancellationToken).ConfigureAwait(false);
                 if (destUnpSize < 0)
@@ -190,6 +194,7 @@ internal sealed partial class Unpack
                     {
                         if (!await ReadTablesAsync(cancellationToken).ConfigureAwait(false))
                         {
+                            ppmError = unpBlockType == BlockTypes.BLOCK_PPM;
                             break;
                         }
 
@@ -450,44 +455,8 @@ internal sealed partial class Unpack
                         rarVM.setMemory(FirstPartLength, window, 0, BlockEnd);
                     }
 
-                    var ParentPrg = filters[flt.ParentFilter].Program;
                     var Prg = flt.Program;
-
-                    if (ParentPrg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                    {
-                        Prg.GlobalData.Clear();
-                        for (
-                            var i = 0;
-                            i < ParentPrg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE;
-                            i++
-                        )
-                        {
-                            Prg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] = ParentPrg.GlobalData[
-                                RarVM.VM_FIXEDGLOBALSIZE + i
-                            ];
-                        }
-                    }
-
                     ExecuteCode(Prg);
-
-                    if (Prg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                    {
-                        if (ParentPrg.GlobalData.Count < Prg.GlobalData.Count)
-                        {
-                            ParentPrg.GlobalData.SetSize(Prg.GlobalData.Count);
-                        }
-
-                        for (var i = 0; i < Prg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE; i++)
-                        {
-                            ParentPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] = Prg.GlobalData[
-                                RarVM.VM_FIXEDGLOBALSIZE + i
-                            ];
-                        }
-                    }
-                    else
-                    {
-                        ParentPrg.GlobalData.Clear();
-                    }
 
                     var FilteredDataOffset = Prg.FilteredDataOffset;
                     var FilteredDataSize = Prg.FilteredDataSize;
@@ -518,47 +487,8 @@ internal sealed partial class Unpack
 
                             rarVM.setMemory(0, FilteredData, 0, FilteredDataSize);
 
-                            var pPrg = filters[NextFilter.ParentFilter].Program;
                             var NextPrg = NextFilter.Program;
-
-                            if (pPrg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                            {
-                                NextPrg.GlobalData.SetSize(pPrg.GlobalData.Count);
-
-                                for (
-                                    var i = 0;
-                                    i < pPrg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE;
-                                    i++
-                                )
-                                {
-                                    NextPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] =
-                                        pPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i];
-                                }
-                            }
-
                             ExecuteCode(NextPrg);
-
-                            if (NextPrg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                            {
-                                if (pPrg.GlobalData.Count < NextPrg.GlobalData.Count)
-                                {
-                                    pPrg.GlobalData.SetSize(NextPrg.GlobalData.Count);
-                                }
-
-                                for (
-                                    var i = 0;
-                                    i < NextPrg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE;
-                                    i++
-                                )
-                                {
-                                    pPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] =
-                                        NextPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i];
-                                }
-                            }
-                            else
-                            {
-                                pPrg.GlobalData.Clear();
-                            }
 
                             FilteredDataOffset = NextPrg.FilteredDataOffset;
                             FilteredDataSize = NextPrg.FilteredDataSize;
@@ -572,7 +502,7 @@ internal sealed partial class Unpack
 
                             for (var i = 0; i < FilteredDataSize; i++)
                             {
-                                FilteredData[i] = NextPrg.GlobalData[FilteredDataOffset + i];
+                                FilteredData[i] = rarVM.Mem[FilteredDataOffset + i];
                             }
 
                             I++;
@@ -580,7 +510,12 @@ internal sealed partial class Unpack
                         }
 
                         await writeStream
-                            .WriteAsync(FilteredData, 0, FilteredDataSize, cancellationToken)
+                            .WriteAsync(
+                                FilteredData,
+                                0,
+                                (int)Math.Min(FilteredDataSize, Math.Max(0, destUnpSize)),
+                                cancellationToken
+                            )
                             .ConfigureAwait(false);
                         writtenFileSize += FilteredDataSize;
                         destUnpSize -= FilteredDataSize;
@@ -767,6 +702,12 @@ internal sealed partial class Unpack
 
                     while (N-- > 0 && i < TableSize)
                     {
+                        if (i == 0)
+                        {
+                            throw new InvalidFormatException(
+                                "RAR table cannot repeat a missing previous length."
+                            );
+                        }
                         table.Span[i] = table.Span[i - 1];
                         i++;
                     }
@@ -881,11 +822,15 @@ internal sealed partial class Unpack
 
     public async ValueTask<int> ReadCharAsync(CancellationToken cancellationToken = default)
     {
-        if (inAddr > MAX_SIZE - 30)
+        if (inAddr >= readTop)
         {
             await unpReadBufAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (inAddr >= readTop)
+        {
+            throw new InvalidFormatException("Truncated RAR PPM data.");
+        }
         return InBuf[inAddr++] & 0xff;
     }
 
@@ -938,5 +883,17 @@ internal sealed partial class Unpack
         }
 
         return AddVMCode(FirstByte, vmCode);
+    }
+
+    private async ValueTask WriteOldDataAsync(
+        byte[] data,
+        int offset,
+        int count,
+        CancellationToken cancellationToken
+    )
+    {
+        count = (int)Math.Min(count, Math.Max(0, fileHeader.UncompressedSize - oldWrittenSize));
+        await writeStream.WriteAsync(data, offset, count, cancellationToken).ConfigureAwait(false);
+        oldWrittenSize += count;
     }
 }

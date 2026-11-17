@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using SharpCompress.Common;
 using SharpCompress.Compressors.Rar.UnpackV1.Decode;
 
 namespace SharpCompress.Compressors.Rar.UnpackV1;
@@ -34,6 +35,7 @@ internal partial class Unpack
 
         while (destUnpSize >= 0)
         {
+            firstWindowDone |= unpPtr >= PackDef.MAXWINSIZE;
             unpPtr &= PackDef.MAXWINMASK;
 
             if (inAddr > readTop - 30)
@@ -226,6 +228,12 @@ internal partial class Unpack
                 AddBits(2);
                 while (N-- > 0 && I < TableSize)
                 {
+                    if (I == 0)
+                    {
+                        throw new InvalidFormatException(
+                            "RAR table cannot repeat a missing previous length."
+                        );
+                    }
                     Table[I] = Table[I - 1];
                     I++;
                 }

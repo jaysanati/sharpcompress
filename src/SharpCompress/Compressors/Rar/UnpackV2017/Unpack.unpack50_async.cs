@@ -38,6 +38,7 @@ internal partial class Unpack
 
         while (true)
         {
+            firstWindowDone |= UnpPtr >= MaxWinSize;
             UnpPtr &= MaxWinMask;
 
             if (Inp.InAddr >= ReadBorder)
@@ -299,7 +300,10 @@ internal partial class Unpack
         {
             ReadBorder = Math.Min(ReadBorder, BlockHeader.BlockStart + BlockHeader.BlockSize - 1);
         }
-        return ReadCode != -1;
+        // A refill may reach EOF with a final partial block still buffered.
+        // Zero lookahead bytes, but never advertise consumed data as input.
+        Array.Clear(Inp.InBuf, ReadTop, Inp.InBuf.Length - ReadTop);
+        return ReadCode > 0 || Inp.InAddr < ReadTop;
     }
 
     private async ValueTask UnpWriteBufAsync(CancellationToken cancellationToken = default)
@@ -392,7 +396,16 @@ internal partial class Unpack
 
                         if (OutMem != null)
                         {
-                            await UnpIO_UnpWriteAsync(OutMem, 0, BlockLength, cancellationToken)
+                            await UnpIO_UnpWriteAsync(
+                                    OutMem,
+                                    0,
+                                    (uint)
+                                        Math.Min(
+                                            BlockLength,
+                                            Math.Max(0, DestUnpSize - WrittenFileSize)
+                                        ),
+                                    cancellationToken
+                                )
                                 .ConfigureAwait(false);
                         }
 

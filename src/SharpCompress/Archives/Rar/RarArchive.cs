@@ -30,12 +30,17 @@ public partial class RarArchive
         IRarAsyncArchive
 {
     private bool _disposed;
-    internal Lazy<IRarUnpack> UnpackV2017 { get; } =
-        new(() => new Compressors.Rar.UnpackV2017.Unpack());
-    internal Lazy<IRarUnpack> UnpackV1 { get; } = new(() => new Compressors.Rar.UnpackV1.Unpack());
+    internal Lazy<IRarUnpack> UnpackV2017 { get; }
+    internal Lazy<IRarUnpack> UnpackV1 { get; }
 
     private RarArchive(SourceStream sourceStream)
-        : base(ArchiveType.Rar, sourceStream) { }
+        : base(ArchiveType.Rar, sourceStream)
+    {
+        UnpackV2017 = new(() =>
+            new Compressors.Rar.UnpackV2017.Unpack(ReaderOptions.MaxDecoderMemory)
+        );
+        UnpackV1 = new(() => new Compressors.Rar.UnpackV1.Unpack(ReaderOptions.MaxDecoderMemory));
+    }
 
     public override void Dispose()
     {

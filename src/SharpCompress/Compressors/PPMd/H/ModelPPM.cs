@@ -235,6 +235,27 @@ internal class ModelPpm : IDisposable
         //medContext = null;
     }
 
+    internal long? MaxDecoderMemory { get; set; }
+
+    private void StopModel()
+    {
+        _minContext = null;
+        _maxContext = null;
+        FoundState = null;
+        SubAlloc.StopSubAllocator();
+    }
+
+    private void StartRarAllocator(int memory)
+    {
+        if (MaxDecoderMemory is long maximum && memory > maximum)
+        {
+            throw new NotSupportedException(
+                "RAR PPMd memory exceeds ReaderOptions.MaxDecoderMemory."
+            );
+        }
+        SubAlloc.StartSubAllocator(memory);
+    }
+
     public void Dispose()
     {
         if (_isDisposed)
@@ -243,7 +264,7 @@ internal class ModelPpm : IDisposable
         }
 
         _isDisposed = true;
-        SubAlloc.StopSubAllocator();
+        StopModel();
         var binSumm = _binSumm;
         if (binSumm is not null)
         {
@@ -346,10 +367,10 @@ internal class ModelPpm : IDisposable
             }
             if (maxOrder == 1)
             {
-                SubAlloc.StopSubAllocator();
+                StopModel();
                 return (false);
             }
-            SubAlloc.StartSubAllocator((maxMb + 1) << 20);
+            StartRarAllocator((maxMb + 1) << 20);
             _minContext = new PpmContext(Heap);
 
             //medContext = new PPMContext(Heap);
@@ -398,10 +419,10 @@ internal class ModelPpm : IDisposable
             }
             if (maxOrder == 1)
             {
-                SubAlloc.StopSubAllocator();
+                StopModel();
                 return false;
             }
-            SubAlloc.StartSubAllocator((maxMb + 1) << 20);
+            StartRarAllocator((maxMb + 1) << 20);
             _minContext = new PpmContext(Heap);
 
             _maxContext = new PpmContext(Heap);
@@ -413,6 +434,11 @@ internal class ModelPpm : IDisposable
 
     public virtual int DecodeChar()
     {
+        if (SubAlloc.GetAllocatedMemory() == 0)
+        {
+            return -1;
+        }
+
         // Debug
         //subAlloc.dumpHeap();
 
@@ -484,6 +510,11 @@ internal class ModelPpm : IDisposable
         CancellationToken cancellationToken = default
     )
     {
+        if (SubAlloc.GetAllocatedMemory() == 0)
+        {
+            return -1;
+        }
+
         // Debug
         //subAlloc.dumpHeap();
 
@@ -923,7 +954,7 @@ internal class ModelPpm : IDisposable
 
         if (maxOrder == 1)
         {
-            SubAlloc.StopSubAllocator();
+            StopModel();
             return (false);
         }
         SubAlloc.StartSubAllocator(maxMemory);
@@ -952,7 +983,7 @@ internal class ModelPpm : IDisposable
 
         if (maxOrder == 1)
         {
-            SubAlloc.StopSubAllocator();
+            StopModel();
             return (false);
         }
         SubAlloc.StartSubAllocator(maxMemory);
@@ -982,6 +1013,11 @@ internal class ModelPpm : IDisposable
 
     public int DecodeChar(Decoder decoder)
     {
+        if (SubAlloc.GetAllocatedMemory() == 0)
+        {
+            return -1;
+        }
+
         if (_minContext.NumStats != 1)
         {
             var s = _tempState1.Initialize(Heap);
@@ -1143,6 +1179,11 @@ internal class ModelPpm : IDisposable
         CancellationToken cancellationToken = default
     )
     {
+        if (SubAlloc.GetAllocatedMemory() == 0)
+        {
+            return -1;
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         if (_minContext.NumStats != 1)

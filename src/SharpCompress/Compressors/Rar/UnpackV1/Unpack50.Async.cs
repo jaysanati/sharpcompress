@@ -50,7 +50,8 @@ internal partial class Unpack
         {
             ReadBorder = Math.Min(ReadBorder, BlockHeader.BlockStart + BlockHeader.BlockSize - 1);
         }
-        return ReadCode != -1;
+        Array.Clear(Inp.InBuf, ReadTop, Inp.InBuf.Length - ReadTop);
+        return ReadCode > 0 || Inp.InAddr < ReadTop;
     }
 
     public async ValueTask Unpack5Async(bool Solid, CancellationToken cancellationToken = default)

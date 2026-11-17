@@ -32,6 +32,7 @@ internal partial class Unpack
 
         while (true)
         {
+            firstWindowDone |= UnpPtr >= MaxWinSize;
             UnpPtr &= MaxWinMask;
 
             if (Inp.InAddr >= ReadBorder)
@@ -324,7 +325,10 @@ internal partial class Unpack
             // and trees earlier than data in input buffer ends.
             ReadBorder = Math.Min(ReadBorder, BlockHeader.BlockStart + BlockHeader.BlockSize - 1);
         }
-        return ReadCode != -1;
+        // A refill may reach EOF with a final partial block still buffered.
+        // Zero lookahead bytes, but never advertise consumed data as input.
+        Array.Clear(Inp.InBuf, ReadTop, Inp.InBuf.Length - ReadTop);
+        return ReadCode > 0 || Inp.InAddr < ReadTop;
     }
 
     private void UnpWriteBuf()
@@ -439,7 +443,15 @@ internal partial class Unpack
 
                         if (OutMem != null)
                         {
-                            UnpIO_UnpWrite(OutMem, 0, BlockLength);
+                            UnpIO_UnpWrite(
+                                OutMem,
+                                0,
+                                (uint)
+                                    Math.Min(
+                                        BlockLength,
+                                        Math.Max(0, DestUnpSize - WrittenFileSize)
+                                    )
+                            );
                         }
 
                         UnpSomeRead = true;

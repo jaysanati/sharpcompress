@@ -77,7 +77,7 @@ internal partial class FileHeader
         CompressionAlgorithm = (byte)((compressionInfo & 0x3f) + 50);
         IsSolid = (compressionInfo & 0x40) == 0x40;
         CompressionMethod = (byte)((compressionInfo >> 7) & 0x7);
-        WindowSize = IsDirectory ? 0 : ((size_t)0x20000) << ((compressionInfo >> 10) & 0xf);
+        WindowSize = IsDirectory ? 0 : 0x20000L << ((compressionInfo >> 10) & 0xf);
 
         _ = await reader
             .ReadRarVIntByteAsync(cancellationToken: cancellationToken)

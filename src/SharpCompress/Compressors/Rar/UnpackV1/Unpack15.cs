@@ -9,6 +9,7 @@
 
 using System;
 using System.IO;
+using SharpCompress.Common;
 using SharpCompress.Compressors.Rar.UnpackV1.Decode;
 
 namespace SharpCompress.Compressors.Rar.UnpackV1;
@@ -248,6 +249,7 @@ internal partial class Unpack
 
         while (destUnpSize >= 0)
         {
+            firstWindowDone |= unpPtr >= PackDef.MAXWINSIZE;
             unpPtr &= PackDef.MAXWINMASK;
 
             if (inAddr > readTop - 30 && !unpReadBuf())
@@ -347,8 +349,9 @@ internal partial class Unpack
         {
             readTop += readCode;
         }
+        Array.Clear(InBuf, readTop, InBuf.Length - readTop);
         readBorder = readTop - 30;
-        return (readCode != -1);
+        return readCode > 0 || inAddr < readTop;
     }
 
     private int getShortLen1(int pos) => pos == 1 ? Buf60 + 3 : ShortLen1[pos];
@@ -538,6 +541,10 @@ internal partial class Unpack
                 DistancePlace = decodeNum(BitField, STARTHF0, DecHf0, PosHf0);
             }
         }
+        if ((uint)DistancePlace >= ChSetB.Length)
+        {
+            throw new InvalidFormatException("Invalid RAR distance symbol.");
+        }
         AvrPlcB += DistancePlace;
         AvrPlcB -= (AvrPlcB >> 8);
         while (true)
@@ -706,6 +713,10 @@ internal partial class Unpack
         int Flags,
             NewFlagsPlace;
         var FlagsPlace = decodeNum(GetBits(), STARTHF2, DecHf2, PosHf2);
+        if ((uint)FlagsPlace >= ChSetC.Length)
+        {
+            throw new InvalidFormatException("Invalid RAR flags symbol.");
+        }
 
         while (true)
         {
@@ -779,6 +790,8 @@ internal partial class Unpack
 
     private void oldCopyString(int Distance, int Length)
     {
+        ValidateDistance(Distance);
+        firstWindowDone |= unpPtr + Length >= PackDef.MAXWINSIZE;
         destUnpSize -= Length;
         while ((Length--) != 0)
         {
@@ -790,9 +803,13 @@ internal partial class Unpack
     private int decodeNum(int Num, int StartPos, int[] DecTab, int[] PosTab)
     {
         int I;
-        for (Num &= 0xfff0, I = 0; DecTab[I] <= Num; I++)
+        for (Num &= 0xfff0, I = 0; I < DecTab.Length && DecTab[I] <= Num; I++)
         {
             StartPos++;
+        }
+        if (I == DecTab.Length || (uint)StartPos >= PosTab.Length)
+        {
+            throw new InvalidFormatException("Invalid RAR Huffman code.");
         }
         AddBits(StartPos);
         return (
@@ -805,12 +822,12 @@ internal partial class Unpack
     {
         if (unpPtr < wrPtr)
         {
-            writeStream.Write(window, wrPtr, -wrPtr & PackDef.MAXWINMASK);
-            writeStream.Write(window, 0, unpPtr);
+            WriteOldData(window, wrPtr, -wrPtr & PackDef.MAXWINMASK);
+            WriteOldData(window, 0, unpPtr);
         }
         else
         {
-            writeStream.Write(window, wrPtr, unpPtr - wrPtr);
+            WriteOldData(window, wrPtr, unpPtr - wrPtr);
         }
         wrPtr = unpPtr;
     }

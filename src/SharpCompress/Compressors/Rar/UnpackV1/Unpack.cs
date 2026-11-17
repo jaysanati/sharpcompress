@@ -18,9 +18,27 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
     private readonly BitInput Inp;
     private bool disposed;
 
-    public Unpack() =>
-        // to ease in porting Unpack50.cs
+    private readonly long? maxDecoderMemory;
+    private bool firstWindowDone;
+
+    public Unpack(long? maxDecoderMemory = null)
+    {
         Inp = this;
+        this.maxDecoderMemory = maxDecoderMemory;
+        ppm.MaxDecoderMemory = maxDecoderMemory;
+    }
+
+    private void ValidateDistance(int distance)
+    {
+        if (
+            distance <= 0
+            || distance > PackDef.MAXWINSIZE
+            || (!firstWindowDone && distance > unpPtr)
+        )
+        {
+            throw new InvalidFormatException("RAR match distance exceeds available history.");
+        }
+    }
 
     public override void Dispose()
     {
@@ -63,11 +81,15 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
     public int ReadChar()
     {
-        if (inAddr > MAX_SIZE - 30)
+        if (inAddr >= readTop)
         {
             unpReadBuf();
         }
 
+        if (inAddr >= readTop)
+        {
+            throw new InvalidFormatException("Truncated RAR PPM data.");
+        }
         return (InBuf[inAddr++] & 0xff);
     }
 
@@ -130,9 +152,14 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
     private void Init()
     {
+        if (maxDecoderMemory is long maximum && PackDef.MAXWINSIZE > maximum)
+        {
+            throw new NotSupportedException("RAR window exceeds ReaderOptions.MaxDecoderMemory.");
+        }
         if (this.window is null)
         {
             this.window = ArrayPool<byte>.Shared.Rent(PackDef.MAXWINSIZE);
+            Array.Clear(window, 0, PackDef.MAXWINSIZE);
         }
 
         inAddr = 0;
@@ -142,11 +169,13 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
     public void DoUnpack(FileHeader fileHeader, Stream readStream, Stream writeStream)
     {
         destUnpSize = fileHeader.UncompressedSize;
+        oldWrittenSize = 0;
         this.fileHeader = fileHeader;
         this.readStream = readStream;
         this.writeStream = writeStream;
-        if (!fileHeader.IsSolid)
+        if (!fileHeader.IsSolid || window is null)
         {
+            firstWindowDone = false;
             if (fileHeader.IsStored)
             {
                 ReleaseWindow();
@@ -248,6 +277,7 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
             if ((!solid || !tablesRead) && !ReadTables())
             {
+                ppmError = unpBlockType == BlockTypes.BLOCK_PPM;
                 return;
             }
         }
@@ -259,6 +289,7 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
         while (true)
         {
+            firstWindowDone |= unpPtr >= PackDef.MAXWINSIZE;
             unpPtr &= PackDef.MAXWINMASK;
 
             if (inAddr > readBorder)
@@ -271,7 +302,7 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
             // System.out.println(((wrPtr - unpPtr) &
             // Compress.MAXWINMASK)+":"+wrPtr+":"+unpPtr);
-            if (((wrPtr - unpPtr) & PackDef.MAXWINMASK) < 260 && wrPtr != unpPtr)
+            if (((wrPtr - unpPtr) & PackDef.MAXWINMASK) < 288 && wrPtr != unpPtr)
             {
                 UnpWriteBuf();
                 if (destUnpSize < 0)
@@ -302,6 +333,7 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
                     {
                         if (!ReadTables())
                         {
+                            ppmError = unpBlockType == BlockTypes.BLOCK_PPM;
                             break;
                         }
 
@@ -567,51 +599,8 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
                         rarVM.setMemory(FirstPartLength, window, 0, BlockEnd);
                     }
 
-                    var ParentPrg = filters[flt.ParentFilter].Program;
                     var Prg = flt.Program;
-
-                    if (ParentPrg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                    {
-                        // copy global data from previous script execution if
-                        // any
-                        // Prg->GlobalData.Alloc(ParentPrg->GlobalData.Size());
-                        // memcpy(&Prg->GlobalData[VM_FIXEDGLOBALSIZE],&ParentPrg->GlobalData[VM_FIXEDGLOBALSIZE],ParentPrg->GlobalData.Size()-VM_FIXEDGLOBALSIZE);
-                        Prg.GlobalData.Clear();
-                        for (
-                            var i = 0;
-                            i < ParentPrg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE;
-                            i++
-                        )
-                        {
-                            Prg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] = ParentPrg.GlobalData[
-                                RarVM.VM_FIXEDGLOBALSIZE + i
-                            ];
-                        }
-                    }
-
                     ExecuteCode(Prg);
-
-                    if (Prg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                    {
-                        // save global data for next script execution
-                        if (ParentPrg.GlobalData.Count < Prg.GlobalData.Count)
-                        {
-                            //ParentPrg.GlobalData.Clear(); // ->GlobalData.Alloc(Prg->GlobalData.Size());
-                            ParentPrg.GlobalData.SetSize(Prg.GlobalData.Count);
-                        }
-
-                        // memcpy(&ParentPrg->GlobalData[VM_FIXEDGLOBALSIZE],&Prg->GlobalData[VM_FIXEDGLOBALSIZE],Prg->GlobalData.Size()-VM_FIXEDGLOBALSIZE);
-                        for (var i = 0; i < Prg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE; i++)
-                        {
-                            ParentPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] = Prg.GlobalData[
-                                RarVM.VM_FIXEDGLOBALSIZE + i
-                            ];
-                        }
-                    }
-                    else
-                    {
-                        ParentPrg.GlobalData.Clear();
-                    }
 
                     var FilteredDataOffset = Prg.FilteredDataOffset;
                     var FilteredDataSize = Prg.FilteredDataSize;
@@ -646,53 +635,8 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
                             // .SetMemory(0,FilteredData,FilteredDataSize);
 
-                            var pPrg = filters[NextFilter.ParentFilter].Program;
                             var NextPrg = NextFilter.Program;
-
-                            if (pPrg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                            {
-                                // copy global data from previous script execution
-                                // if any
-                                // NextPrg->GlobalData.Alloc(ParentPrg->GlobalData.Size());
-                                NextPrg.GlobalData.SetSize(pPrg.GlobalData.Count);
-
-                                // memcpy(&NextPrg->GlobalData[VM_FIXEDGLOBALSIZE],&ParentPrg->GlobalData[VM_FIXEDGLOBALSIZE],ParentPrg->GlobalData.Size()-VM_FIXEDGLOBALSIZE);
-                                for (
-                                    var i = 0;
-                                    i < pPrg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE;
-                                    i++
-                                )
-                                {
-                                    NextPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] =
-                                        pPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i];
-                                }
-                            }
-
                             ExecuteCode(NextPrg);
-
-                            if (NextPrg.GlobalData.Count > RarVM.VM_FIXEDGLOBALSIZE)
-                            {
-                                // save global data for next script execution
-                                if (pPrg.GlobalData.Count < NextPrg.GlobalData.Count)
-                                {
-                                    pPrg.GlobalData.SetSize(NextPrg.GlobalData.Count);
-                                }
-
-                                // memcpy(&ParentPrg->GlobalData[VM_FIXEDGLOBALSIZE],&NextPrg->GlobalData[VM_FIXEDGLOBALSIZE],NextPrg->GlobalData.Size()-VM_FIXEDGLOBALSIZE);
-                                for (
-                                    var i = 0;
-                                    i < NextPrg.GlobalData.Count - RarVM.VM_FIXEDGLOBALSIZE;
-                                    i++
-                                )
-                                {
-                                    pPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i] =
-                                        NextPrg.GlobalData[RarVM.VM_FIXEDGLOBALSIZE + i];
-                                }
-                            }
-                            else
-                            {
-                                pPrg.GlobalData.Clear();
-                            }
 
                             FilteredDataOffset = NextPrg.FilteredDataOffset;
                             FilteredDataSize = NextPrg.FilteredDataSize;
@@ -706,14 +650,18 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
                             for (var i = 0; i < FilteredDataSize; i++)
                             {
-                                FilteredData[i] = NextPrg.GlobalData[FilteredDataOffset + i];
+                                FilteredData[i] = rarVM.Mem[FilteredDataOffset + i];
                             }
 
                             I++;
                             prgStack[I] = null;
                         }
 
-                        writeStream.Write(FilteredData, 0, FilteredDataSize);
+                        writeStream.Write(
+                            FilteredData,
+                            0,
+                            (int)Math.Min(FilteredDataSize, Math.Max(0, destUnpSize))
+                        );
                         writtenFileSize += FilteredDataSize;
                         destUnpSize -= FilteredDataSize;
                         WrittenBorder = BlockEnd;
@@ -803,10 +751,12 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
     private void CopyString(int length, int distance)
     {
+        ValidateDistance(distance);
+        firstWindowDone |= unpPtr + length >= PackDef.MAXWINSIZE;
         // System.out.println("copyString(" + length + ", " + distance + ")");
 
         var destPtr = unpPtr - distance;
-        var safeZone = PackDef.MAXWINSIZE - 260;
+        var safeZone = PackDef.MAXWINSIZE - length;
 
         // Fast path: use Array.Copy for bulk operations when in safe zone
         if (destPtr >= 0 && destPtr < safeZone && unpPtr < safeZone && distance >= length)
@@ -1024,6 +974,12 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
                 while (N-- > 0 && i < TableSize)
                 {
+                    if (i == 0)
+                    {
+                        throw new InvalidFormatException(
+                            "RAR table cannot repeat a missing previous length."
+                        );
+                    }
                     table[i] = table[i - 1];
                     i++;
                 }
@@ -1155,6 +1111,10 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
     private bool AddVMCode(int firstByte, List<byte> vmCode)
     {
+        if (vmCode.Count == 0 || vmCode.Count > MAX_SIZE)
+        {
+            throw new InvalidFormatException("Invalid RAR filter record length.");
+        }
         using var Inp = new BitInput();
         Inp.InitBitInput();
 
@@ -1182,9 +1142,9 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
             FiltPos = lastFilter; // use the same filter as last time
         }
 
-        if (FiltPos > filters.Count || FiltPos > oldFilterLengths.Count)
+        if (FiltPos < 0 || FiltPos > filters.Count || FiltPos > oldFilterLengths.Count)
         {
-            return (false);
+            throw new InvalidFormatException("Invalid RAR filter position.");
         }
 
         lastFilter = FiltPos;
@@ -1201,7 +1161,7 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
             // too many different filters, corrupt archive
             if (FiltPos > 1024)
             {
-                return (false);
+                throw new InvalidFormatException("Invalid RAR filter program.");
             }
 
             // Filters[Filters.Size()-1]=Filter=new UnpackFilter;
@@ -1219,6 +1179,12 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
             Filter.ExecCount++; // ->ExecCount++;
         }
 
+        // Reclaim executed slots before enforcing UnRAR's bounded filter stack.
+        prgStack.RemoveAll(filter => filter is null);
+        if (prgStack.Count >= 8192)
+        {
+            throw new InvalidFormatException("Too many RAR filters.");
+        }
         prgStack.Add(StackFilter);
         StackFilter.ExecCount = Filter.ExecCount; // ->ExecCount;
 
@@ -1237,6 +1203,11 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
         {
             StackFilter.BlockLength =
                 FiltPos < oldFilterLengths.Count ? oldFilterLengths[FiltPos] : 0;
+        }
+
+        if ((uint)StackFilter.BlockLength > RarVM.VM_MEMSIZE)
+        {
+            throw new InvalidFormatException("Invalid RAR filter block length.");
         }
 
         StackFilter.NextWindow =
@@ -1274,9 +1245,9 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
         if (NewFilter)
         {
             var VMCodeSize = RarVM.ReadData(Inp);
-            if (VMCodeSize >= 0x10000 || VMCodeSize == 0)
+            if (VMCodeSize >= 0x10000 || VMCodeSize <= 0)
             {
-                return (false);
+                throw new InvalidFormatException("Invalid RAR filter program.");
             }
 
             var VMCode = ArrayPool<byte>.Shared.Rent(VMCodeSize);
@@ -1284,9 +1255,9 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
             {
                 for (var I = 0; I < VMCodeSize; I++)
                 {
-                    if (Inp.Overflow(3))
+                    if (Inp.inAddr * 8 + Inp.inBit + 8 > vmCode.Count * 8)
                     {
-                        return (false);
+                        throw new InvalidFormatException("Invalid RAR filter program.");
                     }
 
                     VMCode[I] = (byte)(Inp.GetBits() >> 8);
@@ -1302,116 +1273,33 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
             }
         }
 
-        StackFilter.Program.AltCommands = Filter.Program.Commands; // StackFilter->Prg.AltCmd=&Filter->Prg.Cmd[0];
-        StackFilter.Program.CommandCount = Filter.Program.CommandCount;
-
-        // StackFilter->Prg.CmdCount=Filter->Prg.CmdCount;
-
-        var StaticDataSize = Filter.Program.StaticData.Count;
-        if (StaticDataSize > 0 && StaticDataSize < RarVM.VM_GLOBALMEMSIZE)
+        StackFilter.Program.Type = Filter.Program.Type;
+        // The input block size is authoritative. Optional registers must not
+        // expose bytes outside the block copied into VM memory.
+        if ((uint)StackFilter.Program.InitR[4] > StackFilter.BlockLength)
         {
-            // read statically defined data contained in DB commands
-            // StackFilter->Prg.StaticData.Add(StaticDataSize);
-            StackFilter.Program.StaticData = Filter.Program.StaticData;
-
-            // memcpy(&StackFilter->Prg.StaticData[0],&Filter->Prg.StaticData[0],StaticDataSize);
+            throw new InvalidFormatException("Invalid RAR filter input length.");
         }
-
-        if (StackFilter.Program.GlobalData.Count < RarVM.VM_FIXEDGLOBALSIZE)
+        if (Inp.inAddr * 8 + Inp.inBit > vmCode.Count * 8)
         {
-            // StackFilter->Prg.GlobalData.Reset();
-            // StackFilter->Prg.GlobalData.Add(VM_FIXEDGLOBALSIZE);
-            StackFilter.Program.GlobalData.Clear();
-            StackFilter.Program.GlobalData.SetSize(RarVM.VM_FIXEDGLOBALSIZE);
+            throw new InvalidFormatException("Truncated RAR filter record.");
         }
-
-        // byte *GlobalData=&StackFilter->Prg.GlobalData[0];
-
-        var globalData = StackFilter.Program.GlobalData;
-        for (var I = 0; I < 7; I++)
-        {
-            rarVM.SetLowEndianValue(globalData, I * 4, StackFilter.Program.InitR[I]);
-        }
-
-        // VM.SetLowEndianValue((uint
-        // *)&GlobalData[0x1c],StackFilter->BlockLength);
-        rarVM.SetLowEndianValue(globalData, 0x1c, StackFilter.BlockLength);
-
-        // VM.SetLowEndianValue((uint *)&GlobalData[0x20],0);
-        rarVM.SetLowEndianValue(globalData, 0x20, 0);
-        rarVM.SetLowEndianValue(globalData, 0x24, 0);
-        rarVM.SetLowEndianValue(globalData, 0x28, 0);
-
-        // VM.SetLowEndianValue((uint
-        // *)&GlobalData[0x2c],StackFilter->ExecCount);
-        rarVM.SetLowEndianValue(globalData, 0x2c, StackFilter.ExecCount);
-
-        // memset(&GlobalData[0x30],0,16);
-        for (var i = 0; i < 16; i++)
-        {
-            globalData[0x30 + i] = 0x0;
-        }
-
-        if ((firstByte & 8) != 0)
-        // put data block passed as parameter if any
-        {
-            if (Inp.Overflow(3))
-            {
-                return (false);
-            }
-
-            var DataSize = RarVM.ReadData(Inp);
-            if (DataSize > RarVM.VM_GLOBALMEMSIZE - RarVM.VM_FIXEDGLOBALSIZE)
-            {
-                return (false);
-            }
-
-            var CurSize = StackFilter.Program.GlobalData.Count;
-            if (CurSize < DataSize + RarVM.VM_FIXEDGLOBALSIZE)
-            {
-                // StackFilter->Prg.GlobalData.Add(DataSize+VM_FIXEDGLOBALSIZE-CurSize);
-                StackFilter.Program.GlobalData.SetSize(
-                    DataSize + RarVM.VM_FIXEDGLOBALSIZE - CurSize
-                );
-            }
-
-            var offset = RarVM.VM_FIXEDGLOBALSIZE;
-            globalData = StackFilter.Program.GlobalData;
-            for (var I = 0; I < DataSize; I++)
-            {
-                if (Inp.Overflow(3))
-                {
-                    return (false);
-                }
-
-                globalData[offset + I] = (byte)(Utility.URShift(Inp.GetBits(), 8));
-                Inp.AddBits(8);
-            }
-        }
-
-        return (true);
+        return true;
     }
 
-    private void ExecuteCode(VMPreparedProgram Prg)
+    private void ExecuteCode(VMPreparedProgram prg)
     {
-        if (Prg.GlobalData.Count > 0)
-        {
-            // Prg->InitR[6]=int64to32(WrittenFileSize);
-            Prg.InitR[6] = (int)(writtenFileSize);
+        prg.InitR[6] = (int)writtenFileSize;
+        rarVM.execute(prg);
+    }
 
-            // rarVM.SetLowEndianValue((uint
-            // *)&Prg->GlobalData[0x24],int64to32(WrittenFileSize));
-            rarVM.SetLowEndianValue(Prg.GlobalData, 0x24, (int)writtenFileSize);
+    private long oldWrittenSize;
 
-            // rarVM.SetLowEndianValue((uint
-            // *)&Prg->GlobalData[0x28],int64to32(WrittenFileSize>>32));
-            rarVM.SetLowEndianValue(
-                Prg.GlobalData,
-                0x28,
-                (int)(Utility.URShift(writtenFileSize, 32))
-            );
-            rarVM.execute(Prg);
-        }
+    private void WriteOldData(byte[] data, int offset, int count)
+    {
+        count = (int)Math.Min(count, Math.Max(0, fileHeader.UncompressedSize - oldWrittenSize));
+        writeStream.Write(data, offset, count);
+        oldWrittenSize += count;
     }
 
     private void CleanUp()

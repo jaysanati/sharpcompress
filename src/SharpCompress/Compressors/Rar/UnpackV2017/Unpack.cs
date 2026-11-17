@@ -124,14 +124,14 @@ internal partial class Unpack : IRarUnpack
         Span<byte> b = stackalloc byte[(int)Math.Min(0x10000, DestUnpSize)];
         do
         {
-            var n = readStream.Read(b);
+            var n = readStream.Read(b.Slice(0, (int)Math.Min(b.Length, DestUnpSize)));
             if (n == 0)
             {
                 break;
             }
             writeStream.Write(b.Slice(0, n));
             DestUnpSize -= n;
-        } while (!Suspended);
+        } while (!Suspended && DestUnpSize > 0);
     }
 
     private async ValueTask UnstoreFileAsync(CancellationToken cancellationToken = default)
@@ -142,7 +142,12 @@ internal partial class Unpack : IRarUnpack
             do
             {
                 var n = await readStream
-                    .ReadAsync(buffer, 0, buffer.Length, cancellationToken)
+                    .ReadAsync(
+                        buffer,
+                        0,
+                        (int)Math.Min(buffer.Length, DestUnpSize),
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 if (n == 0)
                 {
@@ -150,7 +155,7 @@ internal partial class Unpack : IRarUnpack
                 }
                 await writeStream.WriteAsync(buffer, 0, n, cancellationToken).ConfigureAwait(false);
                 DestUnpSize -= n;
-            } while (!Suspended);
+            } while (!Suspended && DestUnpSize > 0);
         }
         finally
         {
@@ -165,9 +170,13 @@ internal partial class Unpack : IRarUnpack
     public int ReadChar()
     {
         // TODO: coderb: not sure where the "MAXSIZE-30" comes from, ported from V1 code
-        if (InAddr > MAX_SIZE - 30)
+        if (InAddr >= ReadTop)
         {
             UnpReadBuf();
+        }
+        if (InAddr >= ReadTop)
+        {
+            throw new SharpCompress.Common.InvalidFormatException("Truncated RAR data.");
         }
         return InBuf[InAddr++];
     }
@@ -176,9 +185,13 @@ internal partial class Unpack : IRarUnpack
     {
         cancellationToken.ThrowIfCancellationRequested();
         // TODO: coderb: not sure where the "MAXSIZE-30" comes from, ported from V1 code
-        if (InAddr > MAX_SIZE - 30)
+        if (InAddr >= ReadTop)
         {
             await UnpReadBufAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (InAddr >= ReadTop)
+        {
+            throw new SharpCompress.Common.InvalidFormatException("Truncated RAR data.");
         }
         return InBuf[InAddr++];
     }

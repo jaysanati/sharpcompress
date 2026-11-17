@@ -744,14 +744,14 @@ public class RarArchiveTests : ArchiveTests
 
         // Opening the archive should work, but extracting should throw
         // when we try to read beyond the truncated data
-        var exception = Assert.Throws<ArchiveOperationException>(() =>
+        var exception = Assert.Throws<InvalidFormatException>(() =>
         {
             using var archive = RarArchive.OpenArchive(truncatedStream);
             foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
             {
                 using var entryStream = entry.OpenEntryStream();
                 using var ms = new MemoryStream();
-                // This should throw InvalidOperationException when it can't read all expected bytes
+                // Truncated entry data is a format error.
                 entryStream.CopyTo(ms);
             }
         });

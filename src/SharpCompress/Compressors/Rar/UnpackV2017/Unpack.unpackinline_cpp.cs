@@ -1,3 +1,4 @@
+using SharpCompress.Common;
 using static SharpCompress.Compressors.Rar.UnpackV2017.PackDef;
 
 namespace SharpCompress.Compressors.Rar.UnpackV2017;
@@ -18,9 +19,14 @@ internal partial class Unpack
 
     private void CopyString(uint Length, uint Distance)
     {
+        if (Distance == 0 || Distance > MaxWinSize || (!firstWindowDone && Distance > UnpPtr))
+        {
+            throw new InvalidFormatException("RAR match distance exceeds available history.");
+        }
+        firstWindowDone |= UnpPtr + Length >= MaxWinSize;
         var SrcPtr = UnpPtr - Distance;
 
-        if (SrcPtr < MaxWinSize - MAX_LZ_MATCH && UnpPtr < MaxWinSize - MAX_LZ_MATCH)
+        if (SrcPtr < MaxWinSize - Length && UnpPtr < MaxWinSize - Length)
         {
             // If we are not close to end of window, we do not need to waste time
             // to "& MaxWinMask" pointer protection.
@@ -60,7 +66,7 @@ internal partial class Unpack
             //      {
             //        // In theory we still could overlap here.
             //        // Supposing Distance == MaxWinSize - 1 we have memcpy(Src, Src + 1, 8).
-            //        // But for real RAR archives Distance <= MaxWinSize - MAX_LZ_MATCH
+            //        // But for real RAR archives Distance <= MaxWinSize - Length
             //        // always, so overlap here is impossible.
             //
             //        // This memcpy expanded inline by MSVC. We could also use uint64

@@ -216,6 +216,10 @@ public partial class LzwStream
 
                 while (code >= 256)
                 {
+                    if (code >= lFreeEnt || lStackP == 0)
+                    {
+                        throw new InvalidFormatException("LZW: invalid or cyclic prefix chain.");
+                    }
                     lStack[--lStackP] = lTabSuffix[code];
                     code = lTabPrefix[code];
                 }

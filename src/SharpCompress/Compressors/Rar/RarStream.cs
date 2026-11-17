@@ -113,7 +113,7 @@ internal partial class RarStream : Stream
         if (count > 0 && outTotal == 0 && _position < Length)
         {
             // sanity check, eg if we try to decompress a redir entry
-            throw new ArchiveOperationException(
+            throw new InvalidFormatException(
                 $"unpacked file size does not match header: expected {Length} found {_position}"
             );
         }

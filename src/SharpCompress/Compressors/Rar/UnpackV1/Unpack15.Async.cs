@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using SharpCompress.Common;
 using SharpCompress.Compressors.Rar.UnpackV1.Decode;
 
 namespace SharpCompress.Compressors.Rar.UnpackV1;
@@ -37,6 +38,7 @@ internal partial class Unpack
 
         while (destUnpSize >= 0)
         {
+            firstWindowDone |= unpPtr >= PackDef.MAXWINSIZE;
             unpPtr &= PackDef.MAXWINMASK;
 
             if (
@@ -136,25 +138,22 @@ internal partial class Unpack
         {
             readTop += readCode;
         }
+        Array.Clear(InBuf, readTop, InBuf.Length - readTop);
         readBorder = readTop - 30;
-        return readCode != -1;
+        return readCode > 0 || inAddr < readTop;
     }
 
     private async ValueTask oldUnpWriteBufAsync(CancellationToken cancellationToken = default)
     {
         if (unpPtr < wrPtr)
         {
-            await writeStream
-                .WriteAsync(window, wrPtr, -wrPtr & PackDef.MAXWINMASK, cancellationToken)
+            await WriteOldDataAsync(window, wrPtr, -wrPtr & PackDef.MAXWINMASK, cancellationToken)
                 .ConfigureAwait(false);
-            await writeStream
-                .WriteAsync(window, 0, unpPtr, cancellationToken)
-                .ConfigureAwait(false);
+            await WriteOldDataAsync(window, 0, unpPtr, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            await writeStream
-                .WriteAsync(window, wrPtr, unpPtr - wrPtr, cancellationToken)
+            await WriteOldDataAsync(window, wrPtr, unpPtr - wrPtr, cancellationToken)
                 .ConfigureAwait(false);
         }
         wrPtr = unpPtr;

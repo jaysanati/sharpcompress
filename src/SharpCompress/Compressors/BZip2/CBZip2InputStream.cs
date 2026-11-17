@@ -856,6 +856,10 @@ internal partial class CBZip2InputStream : Stream
                     {
                         s += (1 + 1) * N;
                     }
+                    if (s >= limitLast - last - 1 || N > limitLast)
+                    {
+                        throw new InvalidFormatException("BZip2: run exceeds block size");
+                    }
                     N *= 2;
                     {
                         int zt,
@@ -1011,6 +1015,10 @@ internal partial class CBZip2InputStream : Stream
                                         thech = (char)bsStream.ReadByte();
                                     }
                                     catch (IOException)
+                                    {
+                                        CompressedStreamEOF();
+                                    }
+                                    if (thech == 0xffff)
                                     {
                                         CompressedStreamEOF();
                                     }
