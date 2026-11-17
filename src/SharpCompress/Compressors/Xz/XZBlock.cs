@@ -32,6 +32,8 @@ public sealed partial class XZBlock : XZReadOnlyStream
     private bool _crcChecked;
     private readonly long _startPosition;
     private bool _isDisposed;
+    internal ulong DecodedUnpaddedSize { get; private set; }
+    internal ulong DecodedUncompressedSize { get; private set; }
 
     public override bool CanRead => !_isDisposed && base.CanRead;
 
@@ -110,6 +112,7 @@ public sealed partial class XZBlock : XZReadOnlyStream
 
     private void SkipPadding()
     {
+        DecodedUnpaddedSize = (ulong)(BaseStream.Position - _startPosition + _checkSize);
         var bytes = (BaseStream.Position - _startPosition) % 4;
         if (bytes > 0)
         {
@@ -140,6 +143,7 @@ public sealed partial class XZBlock : XZReadOnlyStream
 
     private void UpdateCheck(byte[] buffer, int offset, int count)
     {
+        DecodedUncompressedSize += (ulong)count;
         if (count == 0 || _checkType == CheckType.NONE)
         {
             return;

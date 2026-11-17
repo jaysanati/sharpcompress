@@ -298,6 +298,10 @@ internal partial class CBZip2InputStream : Stream
         }
         if (magic0 != 'B' || magic1 != 'Z' || magic2 != 'h')
         {
+            if (!isFirstStream)
+            {
+                return false;
+            }
             throw new InvalidFormatException("Not a BZIP2 marked stream");
         }
         var magic3 = bsStream.ReadByte();
@@ -624,6 +628,10 @@ internal partial class CBZip2InputStream : Stream
         }
 
         MakeMaps();
+        if (nInUse == 0)
+        {
+            throw new InvalidFormatException("BZip2: empty symbol map");
+        }
         alphaSize = nInUse + 2;
 
         /* Now the selectors */
@@ -633,6 +641,10 @@ internal partial class CBZip2InputStream : Stream
             throw new InvalidFormatException("BZip2: invalid number of Huffman trees");
         }
         nSelectors = BsR(15);
+        if (nSelectors < 1)
+        {
+            throw new InvalidFormatException("BZip2: no Huffman selectors");
+        }
         for (i = 0; i < nSelectors; i++)
         {
             j = 0;
@@ -1027,6 +1039,23 @@ internal partial class CBZip2InputStream : Stream
 
     private void SetupBlock()
     {
+        if (streamEnd)
+        {
+            return;
+        }
+        PrepareBlock();
+        if (blockRandomised)
+        {
+            SetupRandPartA();
+        }
+        else
+        {
+            SetupNoRandPartA();
+        }
+    }
+
+    private void PrepareBlock()
+    {
         Span<int> cftab = stackalloc int[257];
         char ch;
 
@@ -1051,7 +1080,8 @@ internal partial class CBZip2InputStream : Stream
             cftab[ch]++;
         }
 
-        if (origPtr < 0 || origPtr >= tt.Length)
+        // bzip2 1.0.8 requires origPtr < nblock (last + 1), rejecting empty blocks.
+        if (origPtr < 0 || origPtr > last)
         {
             throw new InvalidFormatException("BZip2: origPtr out of bounds");
         }
@@ -1065,16 +1095,30 @@ internal partial class CBZip2InputStream : Stream
         {
             rNToGo = 0;
             rTPos = 0;
-            SetupRandPartA();
-        }
-        else
-        {
-            SetupNoRandPartA();
         }
     }
 
     private void SetupRandPartA()
     {
+        // Advance blocks iteratively; block setup must not call back into this path.
+        while (!streamEnd && i2 > last)
+        {
+            EndBlock();
+            InitBlock();
+            if (!streamEnd)
+            {
+                PrepareBlock();
+            }
+        }
+        if (streamEnd)
+        {
+            return;
+        }
+        if (!blockRandomised)
+        {
+            SetupNoRandPartA();
+            return;
+        }
         if (i2 <= last)
         {
             chPrev = ch2;
@@ -1097,16 +1141,29 @@ internal partial class CBZip2InputStream : Stream
             currentState = RAND_PART_B_STATE;
             mCrc.UpdateCRC(ch2);
         }
-        else
-        {
-            EndBlock();
-            InitBlock();
-            SetupBlock();
-        }
     }
 
     private void SetupNoRandPartA()
     {
+        // Advance blocks iteratively; block setup must not call back into this path.
+        while (!streamEnd && i2 > last)
+        {
+            EndBlock();
+            InitBlock();
+            if (!streamEnd)
+            {
+                PrepareBlock();
+            }
+        }
+        if (streamEnd)
+        {
+            return;
+        }
+        if (blockRandomised)
+        {
+            SetupRandPartA();
+            return;
+        }
         if (i2 <= last)
         {
             chPrev = ch2;
@@ -1117,12 +1174,6 @@ internal partial class CBZip2InputStream : Stream
             currentChar = ch2;
             currentState = NO_RAND_PART_B_STATE;
             mCrc.UpdateCRC(ch2);
-        }
-        else
-        {
-            EndBlock();
-            InitBlock();
-            SetupBlock();
         }
     }
 
@@ -1240,8 +1291,12 @@ internal partial class CBZip2InputStream : Stream
         }
 
         var n = BZip2Constants.baseBlockSize * newSize100k;
-        ll8 = new char[n];
-        tt = new int[n];
+        // Retain the largest tables across concatenated streams.
+        if (ll8 is null || ll8.Length < n)
+        {
+            ll8 = new char[n];
+            tt = new int[n];
+        }
     }
 
     public override void Flush() { }

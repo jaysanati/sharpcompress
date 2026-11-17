@@ -69,6 +69,10 @@ internal partial class CBZip2InputStream
         }
         if (magic0 != 'B' || magic1 != 'Z' || magic2 != 'h')
         {
+            if (!isFirstStream)
+            {
+                return false;
+            }
             throw new InvalidFormatException("Not a BZIP2 marked stream");
         }
         var read3 = await bsStream
@@ -248,6 +252,10 @@ internal partial class CBZip2InputStream
         }
 
         MakeMaps();
+        if (nInUse == 0)
+        {
+            throw new InvalidFormatException("BZip2: empty symbol map");
+        }
         alphaSize = nInUse + 2;
 
         /* Now the selectors */
@@ -257,6 +265,10 @@ internal partial class CBZip2InputStream
             throw new InvalidFormatException("BZip2: invalid number of Huffman trees");
         }
         nSelectors = await BsRAsync(15, cancellationToken).ConfigureAwait(false);
+        if (nSelectors < 1)
+        {
+            throw new InvalidFormatException("BZip2: no Huffman selectors");
+        }
         for (i = 0; i < nSelectors; i++)
         {
             j = 0;
@@ -665,39 +677,11 @@ internal partial class CBZip2InputStream
 
     private async ValueTask SetupBlockAsync(CancellationToken cancellationToken)
     {
-        Span<int> cftab = stackalloc int[257];
-        char ch;
-
-        cftab[0] = 0;
-        for (i = 1; i <= 256; i++)
+        if (streamEnd)
         {
-            cftab[i] = unzftab[i - 1];
+            return;
         }
-        for (i = 1; i <= 256; i++)
-        {
-            cftab[i] += cftab[i - 1];
-        }
-
-        for (i = 0; i <= last; i++)
-        {
-            ch = ll8[i];
-            if (cftab[ch] < 0 || cftab[ch] >= tt.Length)
-            {
-                throw new InvalidFormatException("BZip2: block data out of bounds");
-            }
-            tt[cftab[ch]] = i;
-            cftab[ch]++;
-        }
-
-        if (origPtr < 0 || origPtr >= tt.Length)
-        {
-            throw new InvalidFormatException("BZip2: origPtr out of bounds");
-        }
-        tPos = tt[origPtr];
-
-        count = 0;
-        i2 = 0;
-        ch2 = 256; /* not a char and not EOF */
+        PrepareBlock();
 
         if (blockRandomised)
         {
@@ -713,6 +697,25 @@ internal partial class CBZip2InputStream
 
     private async ValueTask SetupRandPartAAsync(CancellationToken cancellationToken)
     {
+        // Advance blocks iteratively; block setup must not call back into this path.
+        while (!streamEnd && i2 > last)
+        {
+            EndBlock();
+            await InitBlockAsync(cancellationToken).ConfigureAwait(false);
+            if (!streamEnd)
+            {
+                PrepareBlock();
+            }
+        }
+        if (streamEnd)
+        {
+            return;
+        }
+        if (!blockRandomised)
+        {
+            await SetupNoRandPartAAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
         if (i2 <= last)
         {
             chPrev = ch2;
@@ -735,16 +738,29 @@ internal partial class CBZip2InputStream
             currentState = RAND_PART_B_STATE;
             mCrc.UpdateCRC(ch2);
         }
-        else
-        {
-            EndBlock();
-            await InitBlockAsync(cancellationToken).ConfigureAwait(false);
-            await SetupBlockAsync(cancellationToken).ConfigureAwait(false);
-        }
     }
 
     private async ValueTask SetupNoRandPartAAsync(CancellationToken cancellationToken)
     {
+        // Advance blocks iteratively; block setup must not call back into this path.
+        while (!streamEnd && i2 > last)
+        {
+            EndBlock();
+            await InitBlockAsync(cancellationToken).ConfigureAwait(false);
+            if (!streamEnd)
+            {
+                PrepareBlock();
+            }
+        }
+        if (streamEnd)
+        {
+            return;
+        }
+        if (blockRandomised)
+        {
+            await SetupRandPartAAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
         if (i2 <= last)
         {
             chPrev = ch2;
@@ -755,12 +771,6 @@ internal partial class CBZip2InputStream
             currentChar = ch2;
             currentState = NO_RAND_PART_B_STATE;
             mCrc.UpdateCRC(ch2);
-        }
-        else
-        {
-            EndBlock();
-            await InitBlockAsync(cancellationToken).ConfigureAwait(false);
-            await SetupBlockAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 

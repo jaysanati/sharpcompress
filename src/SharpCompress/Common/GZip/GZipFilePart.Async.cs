@@ -142,6 +142,10 @@ internal sealed partial class GZipFilePart
             }
             else
             {
+                if (list.Count >= 64 * 1024)
+                {
+                    throw new InvalidFormatException("GZIP header string exceeds 64 KiB.");
+                }
                 list.Add(buf1[0]);
             }
         } while (!done);

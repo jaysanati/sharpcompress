@@ -64,6 +64,8 @@
 
 - XZ is a container format around LZMA2-compressed blocks, not just raw LZMA/LZMA2 data.
 - XZ streams can include per-block integrity checks selected by the stream header: CRC32, CRC64/XZ, SHA-256, or none. SharpCompress validates these checks while reading XZ blocks.
+- Concatenated XZ streams are decoded in order, including zero padding in multiples of four bytes. Invalid padding or trailing data throws `InvalidFormatException`.
+- Reading to the end validates the index CRC32, the index's block sizes, and the footer's flags and backward size. Unsupported filter IDs throw `NotSupportedException`.
 - Raw LZMA/LZMA2 decoding does not provide the same container-level CRC validation; it only validates what the decoder format itself can detect, such as malformed compressed data or invalid end markers.
 
 ## Compression Streams

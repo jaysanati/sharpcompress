@@ -1,7 +1,9 @@
 #nullable disable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using SharpCompress.Common;
@@ -69,29 +71,92 @@ public sealed partial class XZStream : XZReadOnlyStream
     private XZBlock _currentBlock;
 
     private bool _endOfStream;
+    private readonly List<(ulong Unpadded, ulong Uncompressed)> _decodedBlocks = new();
 
     public override int Read(byte[] buffer, int offset, int count)
     {
         ThrowIfDisposed();
         var bytesRead = 0;
-        if (_endOfStream)
+        while (bytesRead < count && !_endOfStream)
         {
-            return bytesRead;
-        }
-
-        if (!HeaderIsRead)
-        {
-            ReadHeader();
-        }
-
-        bytesRead = ReadBlocks(buffer, offset, count);
-        if (bytesRead < count)
-        {
-            _endOfStream = true;
-            ReadIndex();
-            ReadFooter();
+            if (!HeaderIsRead)
+            {
+                ReadHeader();
+            }
+            var read = ReadBlocks(buffer, offset + bytesRead, count - bytesRead);
+            bytesRead += read;
+            if (bytesRead < count)
+            {
+                ReadIndex();
+                ReadFooter();
+                ValidateStream();
+                ReadNextStream();
+            }
         }
         return bytesRead;
+    }
+
+    private void ReadNextStream()
+    {
+        var padding = 0;
+        int value;
+        while ((value = BaseStream.ReadByte()) == 0)
+        {
+            padding = (padding + 1) % 4;
+        }
+        if (padding != 0)
+        {
+            throw new InvalidFormatException("XZ stream padding is not a multiple of four.");
+        }
+        if (value == -1)
+        {
+            _endOfStream = true;
+            return;
+        }
+        var header = new byte[12];
+        header[0] = (byte)value;
+        if (!BaseStream.ReadFully(header.AsSpan(1, 11)))
+        {
+            throw new InvalidFormatException("Incomplete concatenated XZ header.");
+        }
+        using var stream = new MemoryStream(header);
+        Header = XZHeader.FromStream(stream);
+        ResetStream();
+    }
+
+    private void ResetStream()
+    {
+        AssertBlockCheckTypeIsSupported();
+        _currentBlock?.Dispose();
+        _currentBlock = null;
+        _decodedBlocks.Clear();
+    }
+
+    private void ValidateStream()
+    {
+        if (Index.Records.Count != _decodedBlocks.Count)
+        {
+            throw new InvalidFormatException("XZ index block count mismatch.");
+        }
+        for (var i = 0; i < _decodedBlocks.Count; i++)
+        {
+            if (
+                Index.Records[i].UnpaddedSize != _decodedBlocks[i].Unpadded
+                || Index.Records[i].UncompressedSize != _decodedBlocks[i].Uncompressed
+            )
+            {
+                throw new InvalidFormatException("XZ index block sizes mismatch.");
+            }
+        }
+        if (
+            Footer.BackwardSize != Footer.StreamStartPosition - Index.StreamStartPosition
+            || Footer.StreamFlags.Length != 2
+            || Footer.StreamFlags[0] != 0
+            || Footer.StreamFlags[1] != (byte)Header.BlockCheckType
+        )
+        {
+            throw new InvalidFormatException("XZ footer does not match the stream header/index.");
+        }
     }
 
     private void ReadHeader()
@@ -103,10 +168,7 @@ public sealed partial class XZStream : XZReadOnlyStream
 
     private void ReadIndex() => Index = XZIndex.FromStream(BaseStream, true);
 
-    // TODO verify Index
     private void ReadFooter() => Footer = XZFooter.FromStream(BaseStream);
-
-    // TODO verify footer
 
     private int ReadBlocks(byte[] buffer, int offset, int count)
     {
@@ -145,7 +207,13 @@ public sealed partial class XZStream : XZReadOnlyStream
 
     private void NextBlock()
     {
-        _currentBlock?.Dispose();
+        if (_currentBlock is not null)
+        {
+            _decodedBlocks.Add(
+                (_currentBlock.DecodedUnpaddedSize, _currentBlock.DecodedUncompressedSize)
+            );
+            _currentBlock.Dispose();
+        }
         _currentBlock = new XZBlock(BaseStream, Header.BlockCheckType, Header.BlockCheckSize);
     }
 }

@@ -64,18 +64,29 @@ public abstract partial class BlockFilter : ReadOnlyStream
         var filterType = (FilterTypes)reader.ReadXZInteger();
         if (!FILTER_MAP.TryGetValue(filterType, out var createFilter))
         {
-            throw new NotImplementedException($"Filter {filterType} has not yet been implemented");
+            throw new NotSupportedException($"XZ filter {(ulong)filterType} is not supported");
         }
 
         var filter = createFilter();
 
         var sizeOfProperties = reader.ReadXZInteger();
-        if (sizeOfProperties > int.MaxValue)
+        if (
+            // Even a maximum-size XZ block header has only 1020 bytes before its CRC.
+            sizeOfProperties > 1020
+            || (
+                reader.BaseStream.CanSeek
+                && sizeOfProperties > (ulong)(reader.BaseStream.Length - reader.BaseStream.Position)
+            )
+        )
         {
             throw new InvalidFormatException("Block filter information too large");
         }
 
         var properties = reader.ReadBytes((int)sizeOfProperties);
+        if (properties.Length != (int)sizeOfProperties)
+        {
+            throw new InvalidFormatException("Truncated XZ filter properties.");
+        }
         filter.Init(properties);
         return filter;
     }

@@ -34,7 +34,13 @@ internal class ExtraData
 internal sealed class ExtraUnicodePathExtraField : ExtraData
 {
     public ExtraUnicodePathExtraField(ExtraDataType type, ushort length, byte[] dataBytes)
-        : base(type, length, dataBytes) { }
+        : base(type, length, dataBytes)
+    {
+        if (length < 5 || dataBytes.Length < length)
+        {
+            throw new InvalidFormatException("Unicode Path extra field is too short.");
+        }
+    }
 
     internal byte Version => DataBytes[0];
 
@@ -105,6 +111,11 @@ internal sealed class Zip64ExtendedInformationExtraField : ExtraData
         {
             CompressedSize = BinaryPrimitives.ReadInt64LittleEndian(DataBytes.AsSpan(currentIndex));
             currentIndex += 8;
+        }
+
+        if (UncompressedSize < 0 || CompressedSize < 0)
+        {
+            throw new InvalidFormatException("ZIP64 size exceeds the supported range.");
         }
 
         if (relativeHeaderOffset == uint.MaxValue)

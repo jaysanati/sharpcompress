@@ -125,6 +125,7 @@ public sealed partial class XZBlock
 
     private void UpdateCheck(ReadOnlyMemory<byte> bytes)
     {
+        DecodedUncompressedSize += (ulong)bytes.Length;
         if (bytes.IsEmpty || _checkType == CheckType.NONE)
         {
             return;
@@ -171,6 +172,7 @@ public sealed partial class XZBlock
 
     private async ValueTask SkipPaddingAsync(CancellationToken cancellationToken = default)
     {
+        DecodedUnpaddedSize = (ulong)(BaseStream.Position - _startPosition + _checkSize);
         var bytes = (BaseStream.Position - _startPosition) % 4;
         if (bytes > 0)
         {

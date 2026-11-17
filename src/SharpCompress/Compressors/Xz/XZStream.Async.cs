@@ -39,26 +39,67 @@ public sealed partial class XZStream
     )
     {
         ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
         var bytesRead = 0;
-        if (_endOfStream)
+        while (bytesRead < count && !_endOfStream)
         {
-            return bytesRead;
-        }
-
-        if (!HeaderIsRead)
-        {
-            await ReadHeaderAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        bytesRead = await ReadBlocksAsync(buffer, offset, count, cancellationToken)
-            .ConfigureAwait(false);
-        if (bytesRead < count)
-        {
-            _endOfStream = true;
-            await ReadIndexAsync(cancellationToken).ConfigureAwait(false);
-            await ReadFooterAsync(cancellationToken).ConfigureAwait(false);
+            if (!HeaderIsRead)
+            {
+                await ReadHeaderAsync(cancellationToken).ConfigureAwait(false);
+            }
+            var read = await ReadBlocksAsync(
+                    buffer,
+                    offset + bytesRead,
+                    count - bytesRead,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            bytesRead += read;
+            if (bytesRead < count)
+            {
+                await ReadIndexAsync(cancellationToken).ConfigureAwait(false);
+                await ReadFooterAsync(cancellationToken).ConfigureAwait(false);
+                ValidateStream();
+                await ReadNextStreamAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         return bytesRead;
+    }
+
+    private async ValueTask ReadNextStreamAsync(CancellationToken cancellationToken)
+    {
+        var header = new byte[12];
+        var padding = 0;
+        int read;
+        while (
+            (
+                read = await BaseStream
+                    .ReadAsync(header, 0, 1, cancellationToken)
+                    .ConfigureAwait(false)
+            ) != 0
+            && header[0] == 0
+        )
+        {
+            padding = (padding + 1) % 4;
+        }
+        if (padding != 0)
+        {
+            throw new InvalidFormatException("XZ stream padding is not a multiple of four.");
+        }
+        if (read == 0)
+        {
+            _endOfStream = true;
+            return;
+        }
+        if (
+            !await BaseStream.ReadFullyAsync(header, 1, 11, cancellationToken).ConfigureAwait(false)
+        )
+        {
+            throw new InvalidFormatException("Incomplete concatenated XZ header.");
+        }
+        using var stream = new MemoryStream(header);
+        Header = await XZHeader.FromStreamAsync(stream, cancellationToken).ConfigureAwait(false);
+        ResetStream();
     }
 
 #if !LEGACY_DOTNET
@@ -76,23 +117,33 @@ public sealed partial class XZStream
         {
             return 0;
         }
-        if (!HeaderIsRead)
+        var bytesRead = 0;
+        while (bytesRead < buffer.Length && !_endOfStream)
         {
-            await ReadHeaderAsync(cancellationToken).ConfigureAwait(false);
-        }
-        if (
-            _currentBlock is not null
-            && _currentBlock.TryReadBuffered(buffer, cancellationToken, out var buffered)
-        )
-        {
-            return buffered;
-        }
-        var bytesRead = await ReadBlocksAsync(buffer, cancellationToken).ConfigureAwait(false);
-        if (bytesRead < buffer.Length)
-        {
-            _endOfStream = true;
-            await ReadIndexAsync(cancellationToken).ConfigureAwait(false);
-            await ReadFooterAsync(cancellationToken).ConfigureAwait(false);
+            if (!HeaderIsRead)
+            {
+                await ReadHeaderAsync(cancellationToken).ConfigureAwait(false);
+            }
+            if (
+                _currentBlock is not null
+                && _currentBlock.TryReadBuffered(
+                    buffer.Slice(bytesRead),
+                    cancellationToken,
+                    out var buffered
+                )
+            )
+            {
+                return bytesRead + buffered;
+            }
+            bytesRead += await ReadBlocksAsync(buffer.Slice(bytesRead), cancellationToken)
+                .ConfigureAwait(false);
+            if (bytesRead < buffer.Length)
+            {
+                await ReadIndexAsync(cancellationToken).ConfigureAwait(false);
+                await ReadFooterAsync(cancellationToken).ConfigureAwait(false);
+                ValidateStream();
+                await ReadNextStreamAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         return bytesRead;
     }

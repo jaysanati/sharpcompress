@@ -74,9 +74,13 @@ public partial class XZIndex
 
     private async ValueTask VerifyCrc32Async(CancellationToken cancellationToken = default)
     {
+        var expected = ComputeCrc32();
         var crc = await _reader
             .BaseStream.ReadLittleEndianUInt32Async(cancellationToken)
             .ConfigureAwait(false);
-        // TODO verify this matches
+        if (crc != expected)
+        {
+            throw new InvalidFormatException("XZ index CRC32 mismatch.");
+        }
     }
 }

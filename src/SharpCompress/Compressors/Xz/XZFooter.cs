@@ -42,7 +42,7 @@ public partial class XZFooter
         using (var stream = new MemoryStream(footerBytes))
         using (var reader = new BinaryReader(stream))
         {
-            BackwardSize = (reader.ReadLittleEndianUInt32() + 1) * 4;
+            BackwardSize = ((long)reader.ReadLittleEndianUInt32() + 1) * 4;
             StreamFlags = reader.ReadBytes(2);
         }
         var magBy = _reader.ReadBytes(2);

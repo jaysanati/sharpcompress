@@ -948,6 +948,20 @@ internal partial class ZlibBaseStream : Stream, IStreamStack
             // we have data in InputBuffer; now compress or decompress as appropriate
             rc = (_wantCompress) ? _z.Deflate(_flushMode) : _z.Inflate(_flushMode);
 
+            // The inflater may still have buffered output after input is exhausted.
+            // Only an end marker proves completion; no progress means truncation.
+            if (
+                !_wantCompress
+                && nomoreinput
+                && rc != ZlibConstants.Z_STREAM_END
+                && _z.AvailableBytesOut == count
+            )
+            {
+                throw new ZlibException(
+                    "Unexpected end of compressed stream before the final block."
+                );
+            }
+
             if (nomoreinput && (rc == ZlibConstants.Z_BUF_ERROR))
             {
                 return 0;
