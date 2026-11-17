@@ -50,9 +50,9 @@ internal sealed partial class ArchiveDatabase
         CancellationToken cancellationToken
     )
     {
-        if (_cachedFolder == folder && _cachedFolderStream != null)
+        if (_cachedFolder == folder && _cachedFolderStream is not null)
         {
-            if (skipSize >= _cachedFolderStreamPosition)
+            if (_cachedEntryState?.IsComplete == true && skipSize >= _cachedFolderStreamPosition)
             {
                 var delta = skipSize - _cachedFolderStreamPosition;
                 if (delta > 0)
@@ -61,16 +61,14 @@ internal sealed partial class ArchiveDatabase
                         .SkipAsync(delta, cancellationToken)
                         .ConfigureAwait(false);
                 }
-                // Assume the caller will fully consume the returned entry stream, advancing the
-                // shared stream by entrySize bytes.
                 _cachedFolderStreamPosition = skipSize + entrySize;
-                return _cachedFolderStream;
+                return CreateCachedEntryStream(_cachedFolderStream, entrySize);
             }
 
-            // Non-sequential (backward) access within the same folder requires restarting.
+            // Backward access, a partial read, or an entry still open requires restarting.
             await DisposeCachedFolderStreamAsync().ConfigureAwait(false);
         }
-        else if (_cachedFolderStream != null)
+        else if (_cachedFolderStream is not null)
         {
             await DisposeCachedFolderStreamAsync().ConfigureAwait(false);
         }
@@ -85,7 +83,7 @@ internal sealed partial class ArchiveDatabase
         _cachedFolder = folder;
         _cachedFolderStream = newStream;
         _cachedFolderStreamPosition = skipSize + entrySize;
-        return newStream;
+        return CreateCachedEntryStream(newStream, entrySize);
     }
 
     internal async ValueTask DisposeCachedFolderStreamAsync()

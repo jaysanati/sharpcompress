@@ -33,7 +33,7 @@ internal class BCJFilterRISCV : Filter
 
                 uint b2 = buffer[i + 2];
                 uint b3 = buffer[i + 3];
-                uint pc = (uint)(_pos + i);
+                uint pc = (uint)(_pos + i - offset);
 
                 uint addr = ((b1 & 0xF0) << 13) | (b2 << 9) | (b3 << 1);
 
@@ -85,7 +85,7 @@ internal class BCJFilterRISCV : Filter
                         new ReadOnlySpan<byte>(buffer, i + 4, 4)
                     );
 
-                    addr -= (uint)(_pos + i);
+                    addr -= (uint)(_pos + i - offset);
 
                     inst2 = (inst >> 12) | (addr << 20);
 
@@ -124,7 +124,7 @@ internal class BCJFilterRISCV : Filter
 
                 uint b2 = buffer[i + 2];
                 uint b3 = buffer[i + 3];
-                uint pc = (uint)(_pos + i);
+                uint pc = (uint)(_pos + i - offset);
 
                 uint addr =
                     ((b1 & 0xF0) << 8)
@@ -163,7 +163,7 @@ internal class BCJFilterRISCV : Filter
                     uint addr = inst & 0xFFFFF000;
                     addr += (inst2 >> 20) - ((inst2 >> 19) & 0x1000);
 
-                    addr += (uint)(_pos + i);
+                    addr += (uint)(_pos + i - offset);
                     inst = 0x17 | (2 << 7) | (inst2 << 12);
 
                     BinaryPrimitives.WriteUInt32LittleEndian(new Span<byte>(buffer, i, 4), inst);

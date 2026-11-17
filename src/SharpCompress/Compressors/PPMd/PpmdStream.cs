@@ -8,6 +8,7 @@ using SharpCompress.Compressors.LZMA.RangeCoder;
 using SharpCompress.Compressors.PPMd.H;
 using SharpCompress.Compressors.PPMd.I1;
 using SharpCompress.IO;
+using DataErrorException = SharpCompress.Compressors.LZMA.DataErrorException;
 
 namespace SharpCompress.Compressors.PPMd;
 
@@ -21,6 +22,7 @@ public class PpmdStream : Stream, IAsyncDisposable
     private Decoder _decoder;
     private long _position;
     private bool _isDisposed;
+    private bool _decodeFailed;
 
     private PpmdStream(PpmdProperties properties, Stream stream, bool compress)
     {
@@ -231,6 +233,10 @@ public class PpmdStream : Stream, IAsyncDisposable
         {
             return 0;
         }
+        if (_decodeFailed)
+        {
+            throw new DataErrorException();
+        }
         var size = 0;
         if (_properties.Version == PpmdVersion.I1)
         {
@@ -247,15 +253,27 @@ public class PpmdStream : Stream, IAsyncDisposable
         }
         if (_properties.Version == PpmdVersion.H7Z)
         {
-            int c;
-            while (size < count && (c = _modelH.DecodeChar(_decoder)) >= 0)
+            while (size < count)
             {
+                var c = CheckDecodedChar(_modelH.DecodeChar(_decoder));
                 buffer[offset++] = (byte)c;
                 size++;
             }
         }
         _position += size;
         return size;
+    }
+
+    private int CheckDecodedChar(int value)
+    {
+        // 7z bounds PPMd output by the folder size; there is no end marker to consume.
+        // A failed model cannot be resumed safely (its range may already be zero).
+        if (value < 0)
+        {
+            _decodeFailed = true;
+            throw new DataErrorException();
+        }
+        return value;
     }
 
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
@@ -276,6 +294,10 @@ public class PpmdStream : Stream, IAsyncDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (_decodeFailed)
+        {
+            throw new DataErrorException();
+        }
         var size = 0;
         if (_properties.Version == PpmdVersion.I1)
         {
@@ -297,16 +319,11 @@ public class PpmdStream : Stream, IAsyncDisposable
         }
         if (_properties.Version == PpmdVersion.H7Z)
         {
-            int c;
-            while (
-                size < count
-                && (
-                    c = await _modelH
-                        .DecodeCharAsync(_decoder, cancellationToken)
-                        .ConfigureAwait(false)
-                ) >= 0
-            )
+            while (size < count)
             {
+                var c = CheckDecodedChar(
+                    await _modelH.DecodeCharAsync(_decoder, cancellationToken).ConfigureAwait(false)
+                );
                 buffer[offset++] = (byte)c;
                 size++;
             }
@@ -328,6 +345,10 @@ public class PpmdStream : Stream, IAsyncDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (_decodeFailed)
+        {
+            throw new DataErrorException();
+        }
         var size = 0;
         var offset = 0;
         var count = buffer.Length;
@@ -355,16 +376,11 @@ public class PpmdStream : Stream, IAsyncDisposable
         }
         if (_properties.Version == PpmdVersion.H7Z)
         {
-            int c;
-            while (
-                size < count
-                && (
-                    c = await _modelH
-                        .DecodeCharAsync(_decoder, cancellationToken)
-                        .ConfigureAwait(false)
-                ) >= 0
-            )
+            while (size < count)
             {
+                var c = CheckDecodedChar(
+                    await _modelH.DecodeCharAsync(_decoder, cancellationToken).ConfigureAwait(false)
+                );
                 buffer.Span[offset++] = (byte)c;
                 size++;
             }

@@ -325,6 +325,39 @@ internal partial class ArchiveDatabase
     private CFolder? _cachedFolder;
     private Stream? _cachedFolderStream;
     private long _cachedFolderStreamPosition;
+    private CachedEntryState? _cachedEntryState;
+
+    private sealed class CachedEntryState
+    {
+        internal bool IsComplete;
+    }
+
+    // Only a fully consumed, closed entry permits reuse of the predicted folder position.
+    // Partial or overlapping opens restart the decoder without penalizing sequential extraction.
+    private sealed class CachedEntryStream : ReadOnlySubStream
+    {
+        private readonly long size;
+        private readonly CachedEntryState state;
+
+        internal CachedEntryStream(Stream stream, long size, CachedEntryState state)
+            : base(stream, size)
+        {
+            this.size = size;
+            this.state = state;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            state.IsComplete = Position == size;
+            base.Dispose(disposing);
+        }
+    }
+
+    private CachedEntryStream CreateCachedEntryStream(Stream stream, long size)
+    {
+        _cachedEntryState = new CachedEntryState();
+        return new CachedEntryStream(stream, size, _cachedEntryState);
+    }
 
     /// <summary>
     /// Returns a stream positioned at <paramref name="skipSize"/> bytes into the decompressed
@@ -340,27 +373,25 @@ internal partial class ArchiveDatabase
         bool enableParallelism = false
     )
     {
-        if (_cachedFolder == folder && _cachedFolderStream != null)
+        if (_cachedFolder == folder && _cachedFolderStream is not null)
         {
-            if (skipSize >= _cachedFolderStreamPosition)
+            if (_cachedEntryState?.IsComplete == true && skipSize >= _cachedFolderStreamPosition)
             {
                 var delta = skipSize - _cachedFolderStreamPosition;
                 if (delta > 0)
                 {
                     _cachedFolderStream.Skip(delta);
                 }
-                // Assume the caller will fully consume the returned entry stream, advancing the
-                // shared stream by entrySize bytes.
                 _cachedFolderStreamPosition = skipSize + entrySize;
-                return _cachedFolderStream;
+                return CreateCachedEntryStream(_cachedFolderStream, entrySize);
             }
 
-            // Non-sequential (backward) access within the same folder requires restarting.
+            // Backward access, a partial read, or an entry still open requires restarting.
             _cachedFolderStream.Dispose();
             _cachedFolderStream = null;
             _cachedFolder = null;
         }
-        else if (_cachedFolderStream != null)
+        else if (_cachedFolderStream is not null)
         {
             _cachedFolderStream.Dispose();
             _cachedFolderStream = null;
@@ -376,7 +407,7 @@ internal partial class ArchiveDatabase
         _cachedFolder = folder;
         _cachedFolderStream = newStream;
         _cachedFolderStreamPosition = skipSize + entrySize;
-        return newStream;
+        return CreateCachedEntryStream(newStream, entrySize);
     }
 
     internal void DisposeCachedFolderStream()

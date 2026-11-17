@@ -63,7 +63,7 @@ internal class SevenZipFilePart : FilePart
             Header.Size,
             _enableParallelism
         );
-        return new ReadOnlySubStream(folderStream, Header.Size, leaveOpen: true);
+        return WrapEntryStream(folderStream);
     }
 
     internal override async ValueTask<Stream?> GetCompressedStreamAsync(
@@ -93,8 +93,20 @@ internal class SevenZipFilePart : FilePart
                 cancellationToken
             )
             .ConfigureAwait(false);
-        return new ReadOnlySubStream(folderStream, Header.Size, leaveOpen: true);
+        return WrapEntryStream(folderStream);
     }
+
+    internal Stream WrapEntryStream(Stream stream) =>
+        new ChecksumValidationStream(
+            stream,
+            Header.Crc is uint crc
+                ? new ChecksumDescriptor(ChecksumKind.Crc32, crc, IsAvailable: true)
+                : default,
+            Header.Name,
+            Header.Size,
+            IsEncrypted,
+            ownsStream: true
+        );
 
     public CompressionType CompressionType
     {

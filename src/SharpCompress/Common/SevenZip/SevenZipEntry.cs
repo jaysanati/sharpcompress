@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using SharpCompress.Common.Options;
 
 namespace SharpCompress.Common.SevenZip;
@@ -39,6 +40,10 @@ public class SevenZipEntry : Entry
             );
         }
     }
+
+    // Both archive and reader entry streams already enforce the stored CRC and size.
+    internal override Stream WrapWithChecksumValidation(Stream source, ExtractionOptions options) =>
+        source;
 
     public override string? Key => FilePart.Header.Name;
 

@@ -200,7 +200,9 @@ public partial class SevenZipArchive : AbstractArchive<SevenZipArchiveEntry, Sev
             // remain intact until the reader advances to another folder or is disposed.
             return new EntryStream(
                 this,
-                new ReadOnlySubStream(_currentFolderStream, entry.Size, leaveOpen: true),
+                entry.FilePart.WrapEntryStream(
+                    new ReadOnlySubStream(_currentFolderStream, entry.Size, leaveOpen: true)
+                ),
                 rewindDecoderOnDispose: false
             );
         }

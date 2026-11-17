@@ -24,7 +24,9 @@ public class SevenZipCrcExtractionTests : ArchiveTests
         var entry = CorruptFirstFileCrc(archive);
         var destination = Path.Combine(SCRATCH_FILES_PATH, "7zip-crc-mismatch.txt");
 
-        var exception = Assert.Throws<InvalidFormatException>(() => entry.WriteToFile(destination));
+        var exception = Assert.Throws<ChecksumMismatchException>(() =>
+            entry.WriteToFile(destination)
+        );
 
         Assert.Contains(entry.Key!, exception.Message);
     }
@@ -33,7 +35,9 @@ public class SevenZipCrcExtractionTests : ArchiveTests
     [InlineData("7Zip.LZMA.7z")]
     [InlineData("7Zip.LZMA2.7z")]
     [InlineData("7Zip.solid.7z")]
-    public void SevenZip_Archive_WriteToFile_Skips_Crc_Mismatch_When_Disabled(string archiveName)
+    public void SevenZip_Archive_WriteToFile_Still_Checks_Stream_Crc_When_Extraction_Check_Disabled(
+        string archiveName
+    )
     {
         using var archive = SevenZipArchive.OpenArchive(
             Path.Combine(TEST_ARCHIVES_PATH, archiveName)
@@ -41,9 +45,9 @@ public class SevenZipCrcExtractionTests : ArchiveTests
         var entry = CorruptFirstFileCrc(archive);
         var destination = Path.Combine(SCRATCH_FILES_PATH, "7zip-crc-disabled.txt");
 
-        entry.WriteToFile(destination, new ExtractionOptions { CheckCrc = false });
-
-        Assert.True(new FileInfo(destination).Length > 0);
+        Assert.Throws<ChecksumMismatchException>(() =>
+            entry.WriteToFile(destination, new ExtractionOptions { CheckCrc = false })
+        );
     }
 
     [Theory]
@@ -60,7 +64,7 @@ public class SevenZipCrcExtractionTests : ArchiveTests
         var entry = CorruptFirstFileCrc(entries);
         var destination = Path.Combine(SCRATCH_FILES_PATH, "7zip-crc-mismatch-async.txt");
 
-        var exception = await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+        var exception = await Assert.ThrowsAsync<ChecksumMismatchException>(async () =>
             await entry.WriteToFileAsync(destination, cancellationToken: CancellationToken.None)
         );
 
@@ -71,7 +75,7 @@ public class SevenZipCrcExtractionTests : ArchiveTests
     [InlineData("7Zip.LZMA.7z")]
     [InlineData("7Zip.LZMA2.7z")]
     [InlineData("7Zip.solid.7z")]
-    public async Task SevenZip_Archive_WriteToFileAsync_Skips_Crc_Mismatch_When_Disabled(
+    public async Task SevenZip_Archive_WriteToFileAsync_Still_Checks_Stream_Crc_When_Extraction_Check_Disabled(
         string archiveName
     )
     {
@@ -83,13 +87,13 @@ public class SevenZipCrcExtractionTests : ArchiveTests
         var entry = CorruptFirstFileCrc(entries);
         var destination = Path.Combine(SCRATCH_FILES_PATH, "7zip-crc-disabled-async.txt");
 
-        await entry.WriteToFileAsync(
-            destination,
-            new ExtractionOptions { CheckCrc = false },
-            cancellationToken: CancellationToken.None
+        await Assert.ThrowsAsync<ChecksumMismatchException>(async () =>
+            await entry.WriteToFileAsync(
+                destination,
+                new ExtractionOptions { CheckCrc = false },
+                cancellationToken: CancellationToken.None
+            )
         );
-
-        Assert.True(new FileInfo(destination).Length > 0);
     }
 
     private static IArchiveEntry CorruptFirstFileCrc(IArchive archive)

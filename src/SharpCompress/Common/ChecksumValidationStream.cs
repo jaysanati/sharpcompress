@@ -15,13 +15,37 @@ internal sealed class ChecksumValidationStream : Stream
     private uint _seed = Crc32Stream.DEFAULT_SEED;
     private ushort _crc16;
     private bool _validated;
+    private bool _skipValidation;
 
-    internal ChecksumValidationStream(Stream stream, ChecksumDescriptor checksum, string? entryName)
+    private readonly long? _expectedSize;
+    private readonly bool _isEncrypted;
+    private readonly bool _ownsStream;
+    private long _bytesRead;
+
+    internal ChecksumValidationStream(
+        Stream stream,
+        ChecksumDescriptor checksum,
+        string? entryName,
+        long? expectedSize = null,
+        bool isEncrypted = false,
+        bool ownsStream = false
+    )
     {
         _stream = stream;
+        _expectedSize = expectedSize;
+        _isEncrypted = isEncrypted;
+        _ownsStream = ownsStream;
         _checksum = checksum;
         _entryName = string.IsNullOrEmpty(entryName) ? "Entry" : entryName!;
         _crc32Table = Crc32Stream.InitializeTable(Crc32Stream.DEFAULT_POLYNOMIAL);
+    }
+
+    internal void SkipValidationOnDispose()
+    {
+        if (_expectedSize.HasValue)
+        {
+            _skipValidation = true;
+        }
     }
 
     public override bool CanRead => _stream.CanRead;
@@ -62,7 +86,21 @@ internal sealed class ChecksumValidationStream : Stream
     }
 #endif
 
-    public override int ReadByte() => throw new NotSupportedException();
+    public override int ReadByte()
+    {
+        var buffer = new byte[1];
+        return Read(buffer, 0, 1) == 0 ? -1 : buffer[0];
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        // Partial reads are allowed; disposal must never force checksum validation.
+        if (disposing && _ownsStream)
+        {
+            _stream.Dispose();
+        }
+        base.Dispose(disposing);
+    }
 
     public override async Task<int> ReadAsync(
         byte[] buffer,
@@ -105,12 +143,25 @@ internal sealed class ChecksumValidationStream : Stream
 
     private void UpdateAndValidateAtEof(ReadOnlySpan<byte> buffer, int read)
     {
+        if (_skipValidation)
+        {
+            return;
+        }
         if (read > 0)
         {
             UpdateChecksum(buffer);
+            _bytesRead += read;
+            if (_expectedSize == _bytesRead)
+            {
+                Validate();
+            }
             return;
         }
 
+        if (_expectedSize.HasValue && _bytesRead != _expectedSize.Value)
+        {
+            throw new EndOfStreamException($"Entry '{_entryName}' ended before its declared size.");
+        }
         Validate();
     }
 
@@ -157,9 +208,20 @@ internal sealed class ChecksumValidationStream : Stream
         var expected = unchecked((uint)_checksum.ExpectedValue);
         if (actual != expected)
         {
-            throw new InvalidFormatException(
-                $"CRC mismatch for entry '{_entryName}'. Expected 0x{expected:X8}, actual 0x{actual:X8}."
-            );
+            var message =
+                $"CRC mismatch for entry '{_entryName}'. Expected 0x{expected:X8}, actual 0x{actual:X8}.";
+            if (_expectedSize.HasValue)
+            {
+                throw new ChecksumMismatchException(
+                    message
+                        + (
+                            _isEncrypted
+                                ? " The data may be corrupt or the password may be wrong."
+                                : ""
+                        )
+                );
+            }
+            throw new InvalidFormatException(message);
         }
     }
 

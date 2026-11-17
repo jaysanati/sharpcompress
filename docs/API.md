@@ -626,6 +626,10 @@ using (var archive = ZipArchive.OpenArchive("file.zip"))
 
 WinZip AES authentication is always checked, including when `CheckCrc` is disabled. Complete or dispose entry streams to verify authentication; plaintext returned before completion must not be treated as authenticated. Invalid authentication tags throw `InvalidFormatException`, and missing ciphertext or tag bytes throw `IncompleteArchiveException`.
 
+7z archive and reader entry streams always validate a defined CRC32 when the declared entry size is reached, including when extraction options set `CheckCrc = false`. A mismatch throws `SharpCompress.Common.ChecksumMismatchException`, derived from `InvalidFormatException`, with a public `ChecksumMismatchException(string message)` constructor. For AES-encrypted folders the message notes that the password may be wrong; CRC failure cannot distinguish a wrong password from damaged data. A folder ending before the declared entry size throws `EndOfStreamException`, even when no CRC is defined. Stopping early and disposing does not validate the unread payload. These rules apply to synchronous and asynchronous reads and extraction helpers.
+
+Opening another archive entry after a partial read restarts the solid-folder decoder. Fully read and disposed entries retain the sequential decoder-reuse optimization. Finish using each entry stream before opening the next; opening another entry can invalidate the previous decoder.
+
 7z AES key derivation accepts iteration exponents 0 through 24 and the special `0x3F` direct-key mode. Larger iteration exponents throw `NotSupportedException` before key derivation, including when salt and IV are absent.
 
 When using `SymbolicLinkHandler`, directory extraction rejects link targets outside the extraction root and never follows symbolic links or reparse points while extracting later entries. The handler itself remains trusted application code.

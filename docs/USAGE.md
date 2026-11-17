@@ -127,6 +127,8 @@ using (var archive = RarArchive.OpenArchive("Test.rar"))
 
 For optimal performance with solid Rar and 7Zip archives, extract entries sequentially. `WriteToDirectory` handles that internally for simple extraction. Use `ExtractAllEntries` when you need to manually iterate in sequential order.
 
+7z entry streams check defined CRCs on the read that reaches the declared size, even with `ExtractionOptions.CheckCrc = false`. Catch `ChecksumMismatchException` for CRC failures and `EndOfStreamException` for truncated output. Disposing a partially read stream does not verify the unread data.
+
 ```C#
 using SharpCompress.Common;
 using SharpCompress.Readers;

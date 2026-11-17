@@ -25,6 +25,12 @@ public partial class EntryStream
             return;
         }
         _isDisposed = true;
+        // Draining a partially read 7z entry keeps solid decoding aligned, but is not
+        // an explicit request to validate the unread data.
+        if (_stream is ChecksumValidationStream checksumStream)
+        {
+            checksumStream.SkipValidationOnDispose();
+        }
         if (!(_completed || _reader.Cancelled))
         {
             await SkipEntryAsync().ConfigureAwait(false);
