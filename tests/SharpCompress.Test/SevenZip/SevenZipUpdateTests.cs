@@ -64,14 +64,20 @@ public class SevenZipUpdateTests : TestBase
         Stream source,
         bool asynchronous,
         string? password = null
-    ) =>
-        asynchronous
+    )
+    {
+        if (source.CanSeek)
+        {
+            source.Position = 0;
+        }
+        return asynchronous
             ? await SevenZipUpdate.OpenAsync(
                 new AsyncOnlyStream(source),
                 new ReaderOptions { Password = password },
                 CancellationToken.None
             )
             : SevenZipUpdate.Open(source, new ReaderOptions { Password = password });
+    }
 
     private static async Task Write(
         SevenZipUpdate update,
@@ -611,6 +617,7 @@ public class SevenZipUpdateTests : TestBase
     public async Task SevenZipUpdate_SplitSourceAndCancellation(bool asynchronous)
     {
         using var source = Create();
+        source.Position = 0;
         using var update = asynchronous
             ? await SevenZipUpdate.OpenAsync(source, cancellationToken: CancellationToken.None)
             : SevenZipUpdate.Open(source);

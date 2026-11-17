@@ -37,7 +37,7 @@ public class SevenZipReadIntegrityTests
             writer.Write("a", source, null);
             if (solid)
             {
-                using var second = new MemoryStream(Data.Reverse().ToArray());
+                using var second = new MemoryStream(Enumerable.Reverse(Data).ToArray());
                 writer.Write("b", second, null);
             }
         }
@@ -220,7 +220,7 @@ public class SevenZipReadIntegrityTests
         {
             second.CopyTo(output);
         }
-        Assert.Equal(Data.Reverse(), output.ToArray());
+        Assert.Equal(Enumerable.Reverse(Data).ToArray(), output.ToArray());
     }
 
     [Theory]

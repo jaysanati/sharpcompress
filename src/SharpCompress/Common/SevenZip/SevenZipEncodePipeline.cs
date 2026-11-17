@@ -49,10 +49,13 @@ internal sealed class SevenZipEncodePipeline : IDisposable
     internal int PeakJobs { get; private set; }
     internal long PeakEstimatedMemory { get; private set; }
     internal int PendingJobs => admitted;
-    internal CancellationToken Token => cancellation.Token;
+    internal CancellationToken Token { get; }
+    internal bool AllowSpill { get; }
 
     internal SevenZipEncodePipeline(SevenZipWriterOptions options)
     {
+        Token = cancellation.Token;
+        AllowSpill = options.Password is null;
         maxThreads = options.MaxThreads;
         budget = options.MemoryBudget;
     }
@@ -86,18 +89,24 @@ internal sealed class SevenZipEncodePipeline : IDisposable
     internal static long Estimate(
         long inputSize,
         CompressionType compression,
-        LzmaEncoderProperties properties
+        LzmaEncoderProperties properties,
+        bool allowSpill = true
     )
     {
-        var input = Math.Min(inputSize, SevenZipJobBuffer.MemoryLimit);
+        var input = allowSpill ? Math.Min(inputSize, SevenZipJobBuffer.MemoryLimit) : inputSize;
         if (compression == CompressionType.None)
         {
             return input;
         }
-        var output = Math.Min(
-            inputSize + (inputSize / 65536 + 1) * 16,
-            SevenZipJobBuffer.MemoryLimit
-        );
+        // LZMA has no stored-chunk fallback. Reserve conservatively for expansion
+        // when encryption prevents spilling an unsplittable folder to disk.
+        var outputBound =
+            compression == CompressionType.LZMA
+                ? checked(inputSize * 2 + 65536)
+                : checked(inputSize + (inputSize / 65536 + 1) * 16);
+        var output = allowSpill
+            ? Math.Min(outputBound, SevenZipJobBuffer.MemoryLimit)
+            : outputBound;
         var encoder =
             (properties.MatchFinder == LzmaMatchFinder.HC4 ? 15L : 23L)
                 * properties.DictionarySize
@@ -112,7 +121,7 @@ internal sealed class SevenZipEncodePipeline : IDisposable
         bool useAsync
     )
     {
-        var estimate = Estimate(input.Length, folder.Compression, folder.Properties);
+        var estimate = Estimate(input.Length, folder.Compression, folder.Properties, AllowSpill);
         try
         {
             Check();
@@ -197,7 +206,10 @@ internal sealed class SevenZipEncodePipeline : IDisposable
     {
         if (!work.Finished && work.Task is { Status: TaskStatus.RanToCompletion })
         {
-            var length = Math.Max(work.Task.WaitForCompletion().Length, MinimumFinishedCharge);
+            var length = Math.Max(
+                work.Task.WaitForCompletion().MemoryCharge,
+                MinimumFinishedCharge
+            );
             estimated += length - work.Estimate;
             work.Estimate = length;
             work.Finished = true;
@@ -245,7 +257,7 @@ internal sealed class SevenZipEncodePipeline : IDisposable
     {
         using (input)
         {
-            var output = new SevenZipJobBuffer();
+            var output = new SevenZipJobBuffer(AllowSpill);
             try
             {
                 Token.ThrowIfCancellationRequested();
@@ -324,9 +336,15 @@ internal sealed class SevenZipEncodePipeline : IDisposable
         }
     }
 
-    public void Dispose() => StopAsync(false).WaitForCompletion();
+    public void Dispose() => Abort();
 
-    internal async ValueTask StopAsync(bool useAsync)
+    internal ValueTask StopAsync(bool useAsync)
+    {
+        Abort();
+        return default;
+    }
+
+    internal void Abort()
     {
         if (stopped)
         {
@@ -334,28 +352,8 @@ internal sealed class SevenZipEncodePipeline : IDisposable
         }
         stopped = true;
         cancellation.Cancel();
-        while (queue.Count > 0)
-        {
-            var work = queue.Dequeue();
-            try
-            {
-                if (work.Task is not null)
-                {
-                    var result = useAsync
-                        ? await work.Task.ConfigureAwait(false)
-                        : work.Task.WaitForCompletion();
-                    result.Dispose();
-                }
-            }
-            catch
-            {
-                // Observe every task; the caller retains the original failure.
-            }
-            finally
-            {
-                work.Folder.Dispose();
-            }
-        }
+        var abandoned = queue.ToArray();
+        queue.Clear();
         admitted = 0;
         estimated = 0;
         foreach (var registration in registrations)
@@ -364,6 +362,31 @@ internal sealed class SevenZipEncodePipeline : IDisposable
         }
         registrations.Clear();
         observed.Clear();
+        // Workers only own staging buffers. Observe and release them without blocking
+        // the caller or ever committing their output to the archive.
+        _ = ReleaseAsync(abandoned);
+    }
+
+    private async Task ReleaseAsync(Work[] abandoned)
+    {
+        foreach (var work in abandoned)
+        {
+            try
+            {
+                if (work.Task is not null)
+                {
+                    (await work.Task.ConfigureAwait(false)).Dispose();
+                }
+            }
+            catch
+            {
+                // Preserve the failure already reported to the caller.
+            }
+            finally
+            {
+                work.Folder.Dispose();
+            }
+        }
         cancellation.Dispose();
     }
 }

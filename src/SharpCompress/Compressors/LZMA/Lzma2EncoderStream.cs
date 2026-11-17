@@ -316,7 +316,7 @@ internal sealed class Lzma2EncoderStream : Stream
 
     private bool CompleteChunk(int unpackedSize)
     {
-        var stored = _packed.Length + 2 >= unpackedSize;
+        var stored = _packed.Length + 2 >= unpackedSize || _packed.Length > 65536;
         if (stored)
         {
             for (var offset = 0; offset < unpackedSize; )

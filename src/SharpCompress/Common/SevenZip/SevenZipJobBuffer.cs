@@ -5,10 +5,24 @@ using SharpCompress.IO;
 namespace SharpCompress.Common.SevenZip;
 
 /// <summary>Pooled job storage, spilling above 256 MiB (the largest LZMA2 block, so only unsplittable LZMA
-/// folders spill). Admission charges at most this much per buffer.</summary>
+/// folders spill). Encrypted jobs stay in memory and are charged at their full size.</summary>
 internal sealed class SevenZipJobBuffer : Stream
 {
     internal const long MemoryLimit = 256L << 20;
+    private readonly bool allowSpill;
+    private readonly long spillThreshold;
+    internal bool HasSpilled => storage is FileStream;
+    internal long MemoryCharge =>
+        storage is PooledMemoryStream memory
+            ? ((long)memory.Capacity + 65535) / 65536 * 65536
+            : 65536;
+
+    internal SevenZipJobBuffer(bool allowSpill = true, long spillThreshold = MemoryLimit)
+    {
+        this.allowSpill = allowSpill;
+        this.spillThreshold = spillThreshold;
+    }
+
     private Stream storage = new PooledMemoryStream(0, 65536);
     public override bool CanRead => storage.CanRead;
     public override bool CanSeek => storage.CanSeek;
@@ -31,7 +45,11 @@ internal sealed class SevenZipJobBuffer : Stream
 
     public override void Write(byte[] buffer, int offset, int count)
     {
-        if (storage is PooledMemoryStream && storage.Position + count > MemoryLimit)
+        if (
+            allowSpill
+            && storage is PooledMemoryStream
+            && storage.Position + count > spillThreshold
+        )
         {
             // CreateNew and DeleteOnClose avoid name races and remove spills on every exit path.
             var path = Path.Combine(

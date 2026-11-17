@@ -94,10 +94,10 @@ internal sealed class HashChain : InWindow, IMatchFinder
         var cyclicBufferSize = historySize + 1;
         if (_cyclicBufferSize != cyclicBufferSize)
         {
-            var replacement = _pool.Rent(checked((int)(cyclicBufferSize)));
+            var replacement = EncoderArrayPool.Rent(_pool, checked((int)(cyclicBufferSize)), 4);
             if (_son.Length != 0)
             {
-                _pool.Return(_son);
+                EncoderArrayPool.Return(_pool, _son, 4);
             }
             _cyclicBufferSize = cyclicBufferSize;
             _son = replacement;
@@ -118,10 +118,10 @@ internal sealed class HashChain : InWindow, IMatchFinder
         hs += 1 + K_FIX_HASH_SIZE;
         if (hs != _hashSizeSum)
         {
-            var replacement = _pool.Rent(checked((int)hs));
+            var replacement = EncoderArrayPool.Rent(_pool, checked((int)hs), 4);
             if (_hash.Length != 0)
             {
-                _pool.Return(_hash);
+                EncoderArrayPool.Return(_pool, _hash, 4);
             }
             _hashSizeSum = hs;
             _hash = replacement;
@@ -133,12 +133,12 @@ internal sealed class HashChain : InWindow, IMatchFinder
         base.Dispose();
         if (_son.Length != 0)
         {
-            _pool.Return(_son);
+            EncoderArrayPool.Return(_pool, _son, 4);
             _son = [];
         }
         if (_hash.Length != 0)
         {
-            _pool.Return(_hash);
+            EncoderArrayPool.Return(_pool, _hash, 4);
             _hash = [];
         }
     }

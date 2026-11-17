@@ -116,10 +116,10 @@ internal sealed class BinTree : InWindow, IMatchFinder
         var cyclicBufferSize = historySize + 1;
         if (_cyclicBufferSize != cyclicBufferSize)
         {
-            var replacement = _pool.Rent(checked((int)(cyclicBufferSize * 2)));
+            var replacement = EncoderArrayPool.Rent(_pool, checked((int)(cyclicBufferSize * 2)), 4);
             if (_son.Length != 0)
             {
-                _pool.Return(_son);
+                EncoderArrayPool.Return(_pool, _son, 4);
             }
             _cyclicBufferSize = cyclicBufferSize;
             _son = replacement;
@@ -146,10 +146,10 @@ internal sealed class BinTree : InWindow, IMatchFinder
         }
         if (hs != _hashSizeSum)
         {
-            var replacement = _pool.Rent(checked((int)hs));
+            var replacement = EncoderArrayPool.Rent(_pool, checked((int)hs), 4);
             if (_hash.Length != 0)
             {
-                _pool.Return(_hash);
+                EncoderArrayPool.Return(_pool, _hash, 4);
             }
             _hashSizeSum = hs;
             _hash = replacement;
@@ -161,12 +161,12 @@ internal sealed class BinTree : InWindow, IMatchFinder
         base.Dispose();
         if (_son.Length != 0)
         {
-            _pool.Return(_son);
+            EncoderArrayPool.Return(_pool, _son, 4);
             _son = [];
         }
         if (_hash.Length != 0)
         {
-            _pool.Return(_hash);
+            EncoderArrayPool.Return(_pool, _hash, 4);
             _hash = [];
         }
     }

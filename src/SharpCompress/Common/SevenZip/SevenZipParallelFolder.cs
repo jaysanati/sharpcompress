@@ -154,7 +154,7 @@ internal sealed class SevenZipParallelFolder : IDisposable
         var offset = 0;
         while (offset < count)
         {
-            pending ??= new SevenZipJobBuffer();
+            pending ??= new SevenZipJobBuffer(pipeline.AllowSpill);
             var length = (int)Math.Min(count - offset, blockSize - pending.Length);
             pending.Write(bytes, offset, length);
             offset += length;
@@ -187,7 +187,7 @@ internal sealed class SevenZipParallelFolder : IDisposable
             if (Size == 0)
             {
                 await pipeline
-                    .SubmitAsync(this, new SevenZipJobBuffer(), useAsync)
+                    .SubmitAsync(this, new SevenZipJobBuffer(pipeline.AllowSpill), useAsync)
                     .ConfigureAwait(false);
             }
             pipeline.End(this);

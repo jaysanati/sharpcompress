@@ -23,6 +23,8 @@ public sealed class SevenZipUpdate : IDisposable
     private readonly ArchiveDatabase database;
     private readonly string? password;
     private readonly SevenZipUpdateEntry[] entries;
+    private SevenZipWriter? activeWriter;
+    private bool aborted;
     private bool started;
     private bool disposed;
 
@@ -63,7 +65,12 @@ public sealed class SevenZipUpdate : IDisposable
     {
         ValidateSource(source);
         readerOptions ??= ReaderOptions.ForExternalStream;
-        source.Position = 0;
+        if (readerOptions.LookForHeader || source.Position != 0)
+        {
+            throw new NotSupportedException(
+                "7z updates require a source at origin zero without LookForHeader or an SFX prefix."
+            );
+        }
         var reader = new ArchiveReader();
         reader.Open(source, readerOptions.LookForHeader);
         var provider = new PasswordProvider(readerOptions.Password);
@@ -80,7 +87,12 @@ public sealed class SevenZipUpdate : IDisposable
         ValidateSource(source);
         cancellationToken.ThrowIfCancellationRequested();
         readerOptions ??= ReaderOptions.ForExternalStream;
-        source.Position = 0;
+        if (readerOptions.LookForHeader || source.Position != 0)
+        {
+            throw new NotSupportedException(
+                "7z updates require a source at origin zero without LookForHeader or an SFX prefix."
+            );
+        }
         var reader = new ArchiveReader();
         await reader
             .OpenAsync(source, readerOptions.LookForHeader, cancellationToken)
@@ -114,6 +126,10 @@ public sealed class SevenZipUpdate : IDisposable
 
     private void CheckMutable()
     {
+        if (aborted)
+        {
+            throw new InvalidOperationException("This update was aborted.");
+        }
         if (disposed)
         {
             throw new ObjectDisposedException(nameof(SevenZipUpdate));
@@ -357,75 +373,104 @@ public sealed class SevenZipUpdate : IDisposable
     {
         StartWrite(destination, options);
         using var writer = new SevenZipWriter(destination, options);
-        writer.PrepareUpdate();
-        for (var index = 0; index < entries.Length; index++)
+        activeWriter = writer;
+        var readingSource = true;
+        try
         {
-            var entry = entries[index];
-            if (entry.FolderIndex < 0)
+            writer.PrepareUpdate();
+            for (var index = 0; index < entries.Length; index++)
             {
-                if (!entry.IsDeleted)
+                var entry = entries[index];
+                if (entry.FolderIndex < 0)
                 {
-                    writer.AppendUpdateEntry(entry.ToWriteEntry());
-                }
-                continue;
-            }
-            var end = FolderEnd(index);
-            var folder = database._folders[entry.FolderIndex];
-            if (CanCopy(index, end, options))
-            {
-                writer.AppendCopiedFolder(
-                    source,
-                    database.GetFolderStreamPos(folder, 0),
-                    database.GetFolderFullPackSize(entry.FolderIndex),
-                    CloneFolder(index, end),
-                    entry.Name
-                );
-                AppendMetadata(writer, index, end);
-            }
-            else if (HasSurvivor(index, end))
-            {
-                using var decoded = database.GetFolderStream(
-                    source,
-                    folder,
-                    database.PasswordProvider
-                );
-                writer.BeginSolidBlock(BlockOptions(folder, options, index, end));
-                for (var i = index; i <= end; i++)
-                {
-                    var item = entries[i];
-                    if (item.FolderIndex < 0)
+                    if (!entry.IsDeleted)
                     {
-                        if (!item.IsDeleted)
+                        writer.AppendUpdateEntry(entry.ToWriteEntry());
+                    }
+                    continue;
+                }
+                var end = FolderEnd(index);
+                var folder = database._folders[entry.FolderIndex];
+                if (CanCopy(index, end, options))
+                {
+                    writer.AppendCopiedFolder(
+                        source,
+                        database.GetFolderStreamPos(folder, 0),
+                        database.GetFolderFullPackSize(entry.FolderIndex),
+                        CloneFolder(index, end),
+                        entry.Name
+                    );
+                    AppendMetadata(writer, index, end);
+                }
+                else if (HasSurvivor(index, end))
+                {
+                    using var decoded = database.GetFolderStream(
+                        source,
+                        folder,
+                        database.PasswordProvider
+                    );
+                    writer.BeginSolidBlock(BlockOptions(folder, options, index, end));
+                    for (var i = index; i <= end; i++)
+                    {
+                        var item = entries[i];
+                        if (item.FolderIndex < 0)
                         {
-                            writer.AppendUpdateEntry(item.ToWriteEntry());
+                            if (!item.IsDeleted)
+                            {
+                                writer.AppendUpdateEntry(item.ToWriteEntry());
+                            }
+                            continue;
                         }
-                        continue;
+                        using var substream = new ReadOnlySubStream(decoded, item.Size);
+                        using var input = new SevenZipUpdateCrcStream(
+                            substream,
+                            item.Crc,
+                            item.Name,
+                            item.Size
+                        );
+                        if (item.IsDeleted)
+                        {
+                            input.CopyTo(Stream.Null);
+                        }
+                        else
+                        {
+                            writer.Write(item.Name, input, item.Metadata);
+                            writer.RestoreUpdateMetadata(item.ToWriteEntry());
+                        }
+                        if (substream.Position != item.Size)
+                        {
+                            throw new EndOfStreamException("Incomplete 7z substream.");
+                        }
                     }
-                    using var input = new ReadOnlySubStream(decoded, item.Size);
-                    if (item.IsDeleted)
-                    {
-                        input.CopyTo(Stream.Null);
-                    }
-                    else
-                    {
-                        writer.Write(item.Name, input, item.Metadata);
-                        writer.RestoreUpdateMetadata(item.ToWriteEntry());
-                    }
-                    if (input.Position != item.Size)
-                    {
-                        throw new EndOfStreamException("Incomplete 7z substream.");
-                    }
+                    writer.EndSolidBlock();
                 }
-                writer.EndSolidBlock();
+                else
+                {
+                    AppendMetadata(writer, index, end);
+                }
+                index = end;
             }
-            else
-            {
-                AppendMetadata(writer, index, end);
-            }
-            index = end;
+            readingSource = false;
+            writer.ResetUpdateBlocks();
+            add?.Invoke(writer);
         }
-        writer.ResetUpdateBlocks();
-        add?.Invoke(writer);
+        catch (Exception exception)
+            when (readingSource
+                && exception is EndOfStreamException or OverflowException or DataErrorException
+            )
+        {
+            writer.Abort();
+            throw new InvalidFormatException("Damaged 7z source during update.", exception);
+        }
+        catch
+        {
+            writer.Abort();
+            throw;
+        }
+        finally
+        {
+            activeWriter = null;
+        }
     }
 
     /// <summary>Write the update using asynchronous decode, encode and output I/O. See WriteTo for ownership and progress.</summary>
@@ -439,105 +484,134 @@ public sealed class SevenZipUpdate : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         StartWrite(destination, options);
         await using var writer = new SevenZipWriter(destination, options);
-        writer.PrepareUpdate();
-        for (var index = 0; index < entries.Length; index++)
+        activeWriter = writer;
+        var readingSource = true;
+        try
         {
-            var entry = entries[index];
-            if (entry.FolderIndex < 0)
+            writer.PrepareUpdate();
+            for (var index = 0; index < entries.Length; index++)
             {
-                if (!entry.IsDeleted)
+                var entry = entries[index];
+                if (entry.FolderIndex < 0)
                 {
-                    writer.AppendUpdateEntry(entry.ToWriteEntry());
-                }
-                continue;
-            }
-            var end = FolderEnd(index);
-            var folder = database._folders[entry.FolderIndex];
-            if (CanCopy(index, end, options))
-            {
-                await writer
-                    .AppendCopiedFolderAsync(
-                        source,
-                        database.GetFolderStreamPos(folder, 0),
-                        database.GetFolderFullPackSize(entry.FolderIndex),
-                        CloneFolder(index, end),
-                        entry.Name,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                AppendMetadata(writer, index, end);
-            }
-            else if (HasSurvivor(index, end))
-            {
-                var decoded = await database
-                    .GetFolderStreamAsync(
-                        source,
-                        folder,
-                        database.PasswordProvider,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                try
-                {
-                    writer.BeginSolidBlock(BlockOptions(folder, options, index, end));
-                    for (var i = index; i <= end; i++)
+                    if (!entry.IsDeleted)
                     {
-                        var item = entries[i];
-                        if (item.FolderIndex < 0)
+                        writer.AppendUpdateEntry(entry.ToWriteEntry());
+                    }
+                    continue;
+                }
+                var end = FolderEnd(index);
+                var folder = database._folders[entry.FolderIndex];
+                if (CanCopy(index, end, options))
+                {
+                    await writer
+                        .AppendCopiedFolderAsync(
+                            source,
+                            database.GetFolderStreamPos(folder, 0),
+                            database.GetFolderFullPackSize(entry.FolderIndex),
+                            CloneFolder(index, end),
+                            entry.Name,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    AppendMetadata(writer, index, end);
+                }
+                else if (HasSurvivor(index, end))
+                {
+                    var decoded = await database
+                        .GetFolderStreamAsync(
+                            source,
+                            folder,
+                            database.PasswordProvider,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    try
+                    {
+                        writer.BeginSolidBlock(BlockOptions(folder, options, index, end));
+                        for (var i = index; i <= end; i++)
                         {
-                            if (!item.IsDeleted)
+                            var item = entries[i];
+                            if (item.FolderIndex < 0)
                             {
-                                writer.AppendUpdateEntry(item.ToWriteEntry());
+                                if (!item.IsDeleted)
+                                {
+                                    writer.AppendUpdateEntry(item.ToWriteEntry());
+                                }
+                                continue;
                             }
-                            continue;
+                            using var substream = new ReadOnlySubStream(decoded, item.Size);
+                            using var input = new SevenZipUpdateCrcStream(
+                                substream,
+                                item.Crc,
+                                item.Name,
+                                item.Size
+                            );
+                            if (item.IsDeleted)
+                            {
+                                await input
+                                    .CopyToAsync(Stream.Null, options.BufferSize, cancellationToken)
+                                    .ConfigureAwait(false);
+                            }
+                            else
+                            {
+                                await writer
+                                    .WriteAsync(item.Name, input, item.Metadata, cancellationToken)
+                                    .ConfigureAwait(false);
+                                writer.RestoreUpdateMetadata(item.ToWriteEntry());
+                            }
+                            if (substream.Position != item.Size)
+                            {
+                                throw new EndOfStreamException("Incomplete 7z substream.");
+                            }
                         }
-                        using var input = new ReadOnlySubStream(decoded, item.Size);
-                        if (item.IsDeleted)
+                        await writer.EndSolidBlockAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+#if NETSTANDARD2_0 || NETFRAMEWORK
+                        if (decoded is IAsyncDisposable asyncDisposable)
                         {
-                            await input
-                                .CopyToAsync(Stream.Null, options.BufferSize, cancellationToken)
-                                .ConfigureAwait(false);
+                            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
                         }
                         else
                         {
-                            await writer
-                                .WriteAsync(item.Name, input, item.Metadata, cancellationToken)
-                                .ConfigureAwait(false);
-                            writer.RestoreUpdateMetadata(item.ToWriteEntry());
+                            decoded.Dispose();
                         }
-                        if (input.Position != item.Size)
-                        {
-                            throw new EndOfStreamException("Incomplete 7z substream.");
-                        }
-                    }
-                    await writer.EndSolidBlockAsync(cancellationToken).ConfigureAwait(false);
-                }
-                finally
-                {
-#if NETSTANDARD2_0 || NETFRAMEWORK
-                    if (decoded is IAsyncDisposable asyncDisposable)
-                    {
-                        await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        decoded.Dispose();
-                    }
 #else
-                    await decoded.DisposeAsync().ConfigureAwait(false);
+                        await decoded.DisposeAsync().ConfigureAwait(false);
 #endif
+                    }
                 }
+                else
+                {
+                    AppendMetadata(writer, index, end);
+                }
+                index = end;
             }
-            else
+            readingSource = false;
+            writer.ResetUpdateBlocks();
+            if (add is not null)
             {
-                AppendMetadata(writer, index, end);
+                await add(writer, cancellationToken).ConfigureAwait(false);
             }
-            index = end;
         }
-        writer.ResetUpdateBlocks();
-        if (add is not null)
+        catch (Exception exception)
+            when (readingSource
+                && exception is EndOfStreamException or OverflowException or DataErrorException
+            )
         {
-            await add(writer, cancellationToken).ConfigureAwait(false);
+            writer.Abort();
+            throw new InvalidFormatException("Damaged 7z source during update.", exception);
+        }
+        catch
+        {
+            writer.Abort();
+            throw;
+        }
+        finally
+        {
+            activeWriter = null;
         }
     }
 
@@ -550,6 +624,13 @@ public sealed class SevenZipUpdate : IDisposable
                 writer.AppendUpdateEntry(entries[i].ToWriteEntry());
             }
         }
+    }
+
+    /// <summary>Abort an active update without finalizing its destination. Idempotent; the source stays open.</summary>
+    public void Abort()
+    {
+        aborted = true;
+        activeWriter?.Abort();
     }
 
     /// <summary>Release this update. The caller-owned source is always left open.</summary>

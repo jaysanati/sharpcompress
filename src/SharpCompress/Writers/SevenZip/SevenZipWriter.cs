@@ -21,7 +21,22 @@ public partial class SevenZipWriter : AbstractWriter
     private readonly SevenZipWriterOptions sevenZipOptions;
     private readonly List<SevenZipWriteEntry> entries = [];
     private readonly List<PackedStream> packedStreams = [];
+    private bool aborted;
     private bool finalized;
+
+    /// <summary>Stop encoding without writing a final header. Idempotent and does not wait for queued jobs.</summary>
+    public void Abort()
+    {
+        aborted = true;
+        finalized = true;
+        encodePipeline?.Abort();
+        parallelFolder?.Dispose();
+        parallelFolder = null;
+        blockEncoder?.Abort();
+        blockEncoder = null;
+        blockOptions = null;
+    }
+
     private bool _placeholderWritten;
     private SevenZipAesEncryption? _encryption;
 
@@ -186,7 +201,7 @@ public partial class SevenZipWriter : AbstractWriter
                 var failedEncoder = blockEncoder;
                 blockEncoder = null;
                 blockOptions = null;
-                failedEncoder?.Dispose();
+                failedEncoder?.Abort();
                 throw;
             }
             AddSolidEntry(filename, options, size);
@@ -197,12 +212,21 @@ public partial class SevenZipWriter : AbstractWriter
         var output = OutputStream.NotNull();
         var outputPosBefore = output.Position;
         var compressor = new SevenZipStreamsCompressor(output);
-        var packed = compressor.Compress(
-            progressStream,
-            sevenZipOptions.CompressionType,
-            sevenZipOptions.LzmaProperties,
-            Encryption
-        );
+        PackedStream packed;
+        try
+        {
+            packed = compressor.Compress(
+                progressStream,
+                sevenZipOptions.CompressionType,
+                sevenZipOptions.LzmaProperties,
+                Encryption
+            );
+        }
+        catch
+        {
+            Abort();
+            throw;
+        }
 
         // Check if the stream was actually empty (handles non-seekable streams with no data)
         var actuallyEmpty = packed.Folder.GetUnpackSize() == 0;

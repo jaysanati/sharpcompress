@@ -39,6 +39,18 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
     private readonly Encoder? _encoder;
     private readonly Lzma2EncoderStream? _lzma2Encoder;
     private byte[]? _asyncHeaderBuffer;
+
+    internal void Abort()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+        _isDisposed = true;
+        _lzma2Encoder?.Abort();
+        ReleaseBuffers();
+    }
+
     private bool _isDisposed;
     private ReadMode _readMode;
 

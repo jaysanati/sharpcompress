@@ -269,7 +269,7 @@ public partial class SevenZipWriter
                 blockOptions = null;
                 if (failedEncoder is not null)
                 {
-                    await failedEncoder.DisposeAsync().ConfigureAwait(false);
+                    failedEncoder.Abort();
                 }
                 throw;
             }
@@ -279,15 +279,24 @@ public partial class SevenZipWriter
 
         var outputPosBefore = output.Position;
         var compressor = new SevenZipStreamsCompressor(output);
-        var packed = await compressor
-            .CompressAsync(
-                progressStream,
-                sevenZipOptions.CompressionType,
-                sevenZipOptions.LzmaProperties,
-                Encryption,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        PackedStream packed;
+        try
+        {
+            packed = await compressor
+                .CompressAsync(
+                    progressStream,
+                    sevenZipOptions.CompressionType,
+                    sevenZipOptions.LzmaProperties,
+                    Encryption,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            Abort();
+            throw;
+        }
 
         var actuallyEmpty = packed.Folder.GetUnpackSize() == 0;
         if (!actuallyEmpty)

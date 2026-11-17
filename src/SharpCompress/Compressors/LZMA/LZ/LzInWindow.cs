@@ -87,7 +87,7 @@ internal class InWindow : IDisposable
             return;
         }
 
-        ArrayPool<byte>.Shared.Return(_bufferBase);
+        EncoderArrayPool.Return(ArrayPool<byte>.Shared, _bufferBase, 1);
         _bufferBase = null;
     }
 
@@ -106,7 +106,11 @@ internal class InWindow : IDisposable
         {
             Free();
             _blockSize = blockSize;
-            _bufferBase = ArrayPool<byte>.Shared.Rent(checked((int)_blockSize));
+            _bufferBase = EncoderArrayPool.Rent(
+                ArrayPool<byte>.Shared,
+                checked((int)_blockSize),
+                1
+            );
         }
         _pointerToLastSafePosition = _blockSize - keepSizeAfter;
         _streamEndWasReached = false;

@@ -229,6 +229,23 @@ internal sealed class SevenZipSolidEncoder : IDisposable, IAsyncDisposable
         }
     }
 
+    internal void Abort()
+    {
+        if (!codecClosed)
+        {
+            codecClosed = true;
+            if (codec is Lzma2EncoderStream lzma2)
+            {
+                lzma2.Abort();
+            }
+            else if (codec is LzmaStream lzma)
+            {
+                lzma.Abort();
+            }
+        }
+        ReleaseResources();
+    }
+
     public void Dispose()
     {
         try

@@ -1129,3 +1129,36 @@ At most one additional input block is pending. The budget is an estimate for job
 process-wide managed-memory limit.
 Async cancellation stops waiting and encoding; failure cleanup joins workers and releases
 pooled buffers and temporary files. Input streams are fully consumed before `Write*` returns.
+
+### Aborting 7z writes and updates
+
+`public void SevenZipWriter.Abort()` and `public void SevenZipUpdate.Abort()`
+are idempotent. Call them when abandoning an operation. They cancel queued parallel
+work without draining or waiting for compression and suppress all further archive
+output, including the final header on `Dispose()` / `DisposeAsync()`. Worker buffers
+are released as cancellation completes. Dispose the writer normally afterward to
+release its destination according to `LeaveStreamOpen`. `EndSolidBlock()` and
+`EndSolidBlockAsync(CancellationToken)` are no-ops after abort. These objects remain
+single-use and are not thread safe; call abort from the owning flow (including an
+additions callback), not concurrently with a write. Update failures automatically
+abort their writer. Discard the partial destination after failure or cancellation.
+
+During update recompression, every decoded source file read (including deleted
+files skipped within a retained folder) is checked against its stored CRC when
+defined. Mismatches throw `ChecksumMismatchException` (an `InvalidFormatException`).
+Truncated substreams and overflowing source sizes throw `InvalidFormatException`
+with the original `EndOfStreamException` or `OverflowException` as inner exception.
+Malformed LZMA data is also wrapped as `InvalidFormatException`, retaining the decoder exception.
+Unsupported coders throw `NotSupportedException` identifying the coder. Cancellation
+throws `OperationCanceledException`; additions callback exceptions propagate.
+Raw-copied folders retain their original checksums and are not decoded or validated.
+
+Updates preserve modeled names, timestamps, attributes and anti flags, but do not
+preserve archive properties, StartPos, unknown property IDs or out-of-range FILETIMEs.
+SFX prefixes are not preserved: opening an update with `LookForHeader` or a source
+position other than zero throws `NotSupportedException`.
+
+Parallel writing with a password keeps input and compressed staging buffers in
+memory; it never spills plaintext to a temporary file. Admission charges their full
+estimated size. As with other jobs, a single job can exceed `MemoryBudget`, and an
+unsplittable LZMA folder may require substantial memory.

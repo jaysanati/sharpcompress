@@ -44,7 +44,9 @@ internal static partial class DecoderRegistry
             case K_COPY:
                 if (info != null)
                 {
-                    throw new NotSupportedException();
+                    throw new NotSupportedException(
+                        $"Unsupported 7z coder 0x{id._id:X} or coder properties."
+                    );
                 }
                 return inStreams.Single();
             case K_DELTA:
@@ -85,7 +87,9 @@ internal static partial class DecoderRegistry
             case K_ZSTD:
                 return new DecompressionStream(inStreams.Single());
             default:
-                throw new NotSupportedException();
+                throw new NotSupportedException(
+                    $"Unsupported 7z coder 0x{id._id:X} or coder properties."
+                );
         }
     }
 }

@@ -106,16 +106,10 @@ public partial class SevenZipWriter
         }
     }
 
-    private async ValueTask AbortParallelAsync(bool useAsync)
+    private ValueTask AbortParallelAsync(bool useAsync)
     {
-        finalized = true;
-        if (encodePipeline is not null)
-        {
-            await encodePipeline.StopAsync(useAsync).ConfigureAwait(false);
-        }
-        parallelFolder?.Dispose();
-        parallelFolder = null;
-        blockOptions = null;
+        Abort();
+        return default;
     }
 
     private async ValueTask DrainParallelAsync(bool useAsync)

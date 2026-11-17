@@ -1474,6 +1474,13 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
 
     private async ValueTask FlushAsync(uint nowPos, CancellationToken cancellationToken = default)
     {
+        if (_lzma2Input is not null)
+        {
+            throw new InvalidOperationException(
+                "LZMA2 chunk encoding requires the synchronous encoder path."
+            );
+        }
+
         ReleaseMfStream();
         await WriteEndMarkerAsync(nowPos & _posStateMask, cancellationToken).ConfigureAwait(false);
         for (var i = 0; i < 5; i++)
@@ -1731,6 +1738,13 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
         CancellationToken cancellationToken = default
     )
     {
+        if (_lzma2Input is not null)
+        {
+            throw new InvalidOperationException(
+                "LZMA2 chunk encoding requires the synchronous encoder path."
+            );
+        }
+
         long inSize = 0;
         long outSize = 0;
         var finished = true;
@@ -2115,6 +2129,13 @@ internal partial class Encoder : ICoder, ISetCoderProperties, IWriteCoderPropert
         CancellationToken cancellationToken = default
     )
     {
+        if (_lzma2Input is not null)
+        {
+            throw new InvalidOperationException(
+                "LZMA2 chunk encoding requires the synchronous encoder path."
+            );
+        }
+
         _matchFinder.SetStream(inStream);
         _processingMode = !final;
         try
