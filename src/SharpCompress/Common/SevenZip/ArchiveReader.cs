@@ -18,8 +18,30 @@ internal partial class ArchiveReader
 {
     private readonly ArrayPool<byte> decoderBufferPool;
 
-    internal ArchiveReader(ArrayPool<byte>? decoderBufferPool = null) =>
+    private readonly long? maxDecoderMemory;
+
+    internal ArchiveReader(ArrayPool<byte>? decoderBufferPool = null, long? maxDecoderMemory = null)
+    {
         this.decoderBufferPool = decoderBufferPool ?? ArrayPool<byte>.Shared;
+        this.maxDecoderMemory = maxDecoderMemory;
+    }
+
+    private void ValidateCount(long count)
+    {
+        if (count < 0 || count > _currentReader.Remaining)
+        {
+            throw new InvalidFormatException("7z count exceeds the available header data.");
+        }
+    }
+
+    private void ValidateFileCount(int count, int streamCount)
+    {
+        // Names and other properties are optional; empty streams need only one bit each.
+        if (count < streamCount || count > streamCount + 8L * _currentReader.Remaining)
+        {
+            throw new InvalidFormatException("7z file count is inconsistent with the header.");
+        }
+    }
 
     internal Stream _stream = null!;
     internal Stack<DataReader> _readerStack = new();
@@ -98,6 +120,7 @@ internal partial class ArchiveReader
 
     private BitVector ReadBitVector(int length)
     {
+        ValidateCount(((long)length + 7) / 8);
         var bits = new BitVector(length);
 
         byte data = 0;
@@ -208,6 +231,7 @@ internal partial class ArchiveReader
         try
         {
             var numCoders = ReadNum();
+            ValidateCount(numCoders);
             folder._coders = new List<CCoderInfo>(numCoders);
             var numInStreams = 0;
             var numOutStreams = 0;
@@ -247,6 +271,7 @@ internal partial class ArchiveReader
                     if ((mainByte & 0x20) != 0)
                     {
                         var propsSize = ReadNum();
+                        ValidateCount(propsSize);
                         coder._props = new byte[propsSize];
                         ReadBytes(coder._props, 0, propsSize);
                     }
@@ -256,13 +281,14 @@ internal partial class ArchiveReader
                         throw new NotSupportedException();
                     }
 
-                    numInStreams += coder._numInStreams;
-                    numOutStreams += coder._numOutStreams;
+                    numInStreams = checked(numInStreams + coder._numInStreams);
+                    numOutStreams = checked(numOutStreams + coder._numOutStreams);
                 }
                 finally { }
             }
 
             var numBindPairs = numOutStreams - 1;
+            ValidateCount(numBindPairs);
             folder._bindPairs = new List<CBindPair>(numBindPairs);
             for (var i = 0; i < numBindPairs; i++)
             {
@@ -278,6 +304,10 @@ internal partial class ArchiveReader
             }
 
             var numPackStreams = numInStreams - numBindPairs;
+            if (numPackStreams != 1)
+            {
+                ValidateCount(numPackStreams);
+            }
 
             //folder.PackStreams.Reserve(numPackStreams);
             if (numPackStreams == 1)
@@ -342,6 +372,7 @@ internal partial class ArchiveReader
             var numPackStreams = ReadNum();
 
             WaitAttribute(BlockType.Size);
+            ValidateCount(numPackStreams);
             packSizes = new List<long>(numPackStreams);
             for (var i = 0; i < numPackStreams; i++)
             {
@@ -390,6 +421,7 @@ internal partial class ArchiveReader
 
                 //folders.Clear();
                 //folders.Reserve(numFolders);
+                ValidateCount(numFolders);
                 folders = new List<CFolder>(numFolders);
                 var index = 0;
                 for (var i = 0; i < numFolders; i++)
@@ -397,6 +429,14 @@ internal partial class ArchiveReader
                     var f = new CFolder { _firstPackStreamId = index };
                     folders.Add(f);
                     GetNextFolderItem(f);
+                    foreach (var coder in f._coders)
+                    {
+                        DecoderRegistry.ValidateProperties(
+                            coder._methodId,
+                            coder._props,
+                            maxDecoderMemory
+                        );
+                    }
                     index += f._packStreams.Count;
                 }
             }
@@ -482,6 +522,24 @@ internal partial class ArchiveReader
                 }
             }
 
+            // Each nonempty folder has one implicit final size; only additional sizes
+            // require bytes. This also bounds all digest allocations below.
+            long explicitSizes = 0;
+            long totalStreams = 0;
+            foreach (var count in numUnpackStreamsInFolders)
+            {
+                explicitSizes = checked(explicitSizes + Math.Max(0, count - 1));
+                totalStreams = checked(totalStreams + count);
+            }
+            ValidateCount(explicitSizes);
+            if (totalStreams > int.MaxValue)
+            {
+                throw new InvalidFormatException("Too many 7z substreams.");
+            }
+            if (type != BlockType.Size && explicitSizes != 0)
+            {
+                throw new InvalidFormatException("Missing 7z substream sizes.");
+            }
             unpackSizes = new List<long>(folders.Count);
             for (var i = 0; i < numUnpackStreamsInFolders.Count; i++)
             {
@@ -493,13 +551,19 @@ internal partial class ArchiveReader
                     continue;
                 }
                 long sum = 0;
-                for (var j = 1; j < numSubstreams; j++)
+                if (type == BlockType.Size)
                 {
-                    if (type == BlockType.Size)
+                    for (var j = 1; j < numSubstreams; j++)
                     {
                         var size = checked((long)ReadNumber());
                         unpackSizes.Add(size);
-                        sum += size;
+                        if (size > folders[i].GetUnpackSize() - sum)
+                        {
+                            throw new InvalidFormatException(
+                                "7z substream sizes exceed the folder size."
+                            );
+                        }
+                        sum = checked(sum + size);
                     }
                 }
                 unpackSizes.Add(folders[i].GetUnpackSize() - sum);
@@ -516,9 +580,9 @@ internal partial class ArchiveReader
                 var numSubstreams = numUnpackStreamsInFolders[i];
                 if (numSubstreams != 1 || !folders[i].UnpackCrcDefined)
                 {
-                    numDigests += numSubstreams;
+                    numDigests = checked(numDigests + numSubstreams);
                 }
-                numDigestsTotal += numSubstreams;
+                numDigestsTotal = checked(numDigestsTotal + numSubstreams);
             }
 
             digests = null!;
@@ -603,6 +667,19 @@ internal partial class ArchiveReader
                 switch (ReadId())
                 {
                     case BlockType.End:
+                        if (numUnpackStreamsInFolders is null && folders is not null)
+                        {
+                            // SubStreamsInfo is optional: one stream per folder is implicit.
+                            numUnpackStreamsInFolders = new List<int>(folders.Count);
+                            unpackSizes = new List<long>(folders.Count);
+                            digests = new List<uint?>(folders.Count);
+                            foreach (var folder in folders)
+                            {
+                                numUnpackStreamsInFolders.Add(1);
+                                unpackSizes.Add(folder.GetUnpackSize());
+                                digests.Add(folder._unpackCrc);
+                            }
+                        }
                         return;
                     case BlockType.PackInfo:
                         ReadPackInfo(out dataOffset, out packSizes, out packCrCs);
@@ -667,14 +744,34 @@ internal partial class ArchiveReader
                     decoderBufferPool
                 );
 
-                var unpackSize = checked((int)folder.GetUnpackSize());
-                var data = new byte[unpackSize];
-                outStream.ReadExact(data, 0, data.Length);
+                var expectedSize = folder.GetUnpackSize();
+                if (expectedSize < 0 || expectedSize > int.MaxValue)
+                {
+                    throw new InvalidFormatException("Decoded header is too large.");
+                }
+                using var decodedHeader = new MemoryStream();
+                var buffer = new byte[8192];
+                long remaining = expectedSize;
+                while (remaining > 0)
+                {
+                    var read = outStream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                    if (read == 0)
+                    {
+                        throw new InvalidFormatException(
+                            "Decoded header ended before its declared size."
+                        );
+                    }
+                    decodedHeader.Write(buffer, 0, read);
+                    remaining -= read;
+                }
+                var data = decodedHeader.ToArray();
+                var unpackSize = data.Length;
                 if (outStream.ReadByte() >= 0)
                 {
                     throw new InvalidFormatException("Decoded stream is longer than expected.");
                 }
                 dataVector.Add(data);
+                packIndex += myPackSizes.Length;
 
                 if (folder.UnpackCrcDefined)
                 {
@@ -765,6 +862,7 @@ internal partial class ArchiveReader
             }
 
             var numFiles = ReadNum();
+            ValidateFileCount(numFiles, unpackSizes.Count);
             db._files = new List<CFileItem>(numFiles);
             for (var i = 0; i < numFiles; i++)
             {
@@ -917,6 +1015,13 @@ internal partial class ArchiveReader
                 }
             }
 
+            if (
+                numFiles - numEmptyStreams != unpackSizes.Count
+                || digests.Count != unpackSizes.Count
+            )
+            {
+                throw new InvalidFormatException("7z files do not match the substreams.");
+            }
             var emptyFileIndex = 0;
             var sizeIndex = 0;
             for (var i = 0; i < numFiles; i++)

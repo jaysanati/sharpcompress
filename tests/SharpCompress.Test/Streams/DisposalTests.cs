@@ -150,7 +150,10 @@ public class DisposalTests
         // 5 bytes: 1 byte properties + 4 bytes dictionary size (little endian)
         // Dictionary size = 1024 (0x400) -> 00 04 00 00
         var lzmaProps = new byte[] { 0, 0, 4, 0, 0 };
-        VerifyAlwaysDispose(stream => LzmaStream.Create(lzmaProps, stream));
+        using var innerStream = new TestStream(new MemoryStream(new byte[5]));
+        var stream = LzmaStream.Create(lzmaProps, innerStream);
+        stream.Dispose();
+        Assert.True(innerStream.IsDisposed);
     }
 
     [Fact]

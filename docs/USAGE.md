@@ -660,3 +660,11 @@ multiple folders for parallel work. A 32 MiB dictionary gives 128 MiB blocks, so
 file occupies one job. A smaller budget can reduce concurrency; even a budget below one
 job's estimate allows that job to run alone. Parallel output may differ from serial output,
 but changing only `MaxThreads` does not change unencrypted archive bytes.
+
+### Limiting 7z decoder memory
+
+When opening untrusted 7z archives, set `ReaderOptions.MaxDecoderMemory` to a
+per-coder byte limit (for example, `64L * 1024 * 1024`). It checks declared PPMd
+memory and LZMA/LZMA2 dictionaries, including encoded headers, during metadata
+loading and throws `NotSupportedException` if exceeded. The default is `null`
+(no caller limit). It does not bound total extraction memory or other formats.

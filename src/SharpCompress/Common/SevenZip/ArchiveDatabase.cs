@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using SharpCompress.Compressors.LZMA;
 using SharpCompress.Compressors.LZMA.Utilities;
 using SharpCompress.IO;
@@ -151,7 +152,8 @@ internal partial class ArchiveDatabase
         Stream stream,
         CFolder folder,
         IPasswordProvider pw,
-        bool enableParallelism = false
+        bool enableParallelism = false,
+        CancellationToken cancellationToken = default
     )
     {
 #if !LEGACY_DOTNET
@@ -164,7 +166,12 @@ internal partial class ArchiveDatabase
         // falls back to the existing sequential decode below.
         if (
             enableParallelism
-            && TryGetParallelDecodedFolderStream(stream, folder, out var parallelStream)
+            && TryGetParallelDecodedFolderStream(
+                stream,
+                folder,
+                out var parallelStream,
+                cancellationToken
+            )
         )
         {
             return parallelStream!;
@@ -200,7 +207,8 @@ internal partial class ArchiveDatabase
     private bool TryGetParallelDecodedFolderStream(
         Stream stream,
         CFolder folder,
-        out Stream? decodedStream
+        out Stream? decodedStream,
+        CancellationToken cancellationToken
     )
     {
         decodedStream = null;
@@ -245,7 +253,17 @@ internal partial class ArchiveDatabase
         var packSize = GetFolderFullPackSize(folderIndex);
         var unpackSize = folder.GetUnpackSize();
 
-        var blocks = Lzma2ParallelDecoder.TryScanBlocks(stream, packStart, packSize, unpackSize);
+        if (!Lzma2ParallelDecoder.CanMaterialize(packSize, unpackSize))
+        {
+            return false;
+        }
+        var blocks = Lzma2ParallelDecoder.TryScanBlocks(
+            stream,
+            packStart,
+            packSize,
+            unpackSize,
+            cancellationToken
+        );
         if (blocks is null || blocks.Count <= 1)
         {
             return false;
@@ -269,7 +287,8 @@ internal partial class ArchiveDatabase
                 packStart,
                 blocks,
                 tempFile.SafeFileHandle,
-                Math.Min(Environment.ProcessorCount, Lzma2ParallelDecoder.MaxThreads)
+                Math.Min(Environment.ProcessorCount, Lzma2ParallelDecoder.MaxThreads),
+                cancellationToken
             );
         }
         catch

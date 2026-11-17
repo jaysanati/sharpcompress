@@ -76,6 +76,14 @@ public sealed record ReaderOptions : IReaderOptions
     public bool DisableCheckIncomplete { get; set; }
 
     /// <summary>
+    /// Maximum declared PPMd memory or LZMA dictionary size in bytes for 7z coders,
+    /// including encoded headers. Null (the default) imposes no caller limit.
+    /// Checked while reading metadata; exceeding it throws NotSupportedException.
+    /// This is a per-coder limit, not a total allocation limit.
+    /// </summary>
+    public long? MaxDecoderMemory { get; set; }
+
+    /// <summary>
     /// Buffer size for stream operations.
     /// </summary>
     public int BufferSize { get; set; } = Constants.BufferSize;

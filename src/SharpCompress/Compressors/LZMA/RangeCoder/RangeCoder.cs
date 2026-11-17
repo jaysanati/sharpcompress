@@ -123,6 +123,16 @@ internal partial class Decoder
     public void SetFastLimit(long limit) => _fastLimit = limit;
 #endif
 
+    private byte ReadRequiredByte()
+    {
+        var value = _stream.ReadByte();
+        if (value < 0)
+        {
+            throw new SharpCompress.Common.IncompleteArchiveException("Unexpected end of stream.");
+        }
+        return (byte)value;
+    }
+
     public void Init(Stream stream)
     {
         _stream = stream;
@@ -131,7 +141,7 @@ internal partial class Decoder
         _range = 0xFFFFFFFF;
         for (var i = 0; i < 5; i++)
         {
-            _code = (_code << 8) | (byte)_stream.ReadByte();
+            _code = (_code << 8) | ReadRequiredByte();
         }
         _total = 5;
 #if !LEGACY_DOTNET
@@ -185,18 +195,19 @@ internal partial class Decoder
         _fastBuffer ??= ArrayPool<byte>.Shared.Rent(FastBufferSize);
         if (_fastEndOfStream)
         {
-            // Match legacy (byte)_stream.ReadByte() behavior: once the stream is
-            // exhausted, keep yielding 0xFF instead of throwing or re-reading.
-            _fastBufferPos = 0;
-            _fastBufferLen = 1;
-            _fastBuffer[0] = 0xFF;
-            return;
+            throw new DataErrorException();
         }
         var requestSize = _fastBuffer.Length;
         if (_fastLimit >= 0)
         {
             var remaining = _fastLimit - _total;
-            requestSize = remaining <= 0 ? 1 : (int)Math.Min(requestSize, remaining);
+            if (remaining <= 0)
+            {
+                throw new SharpCompress.Common.IncompleteArchiveException(
+                    "Unexpected end of stream."
+                );
+            }
+            requestSize = (int)Math.Min(requestSize, remaining);
         }
         else if (!_fastBufferSafeUnbounded)
         {
@@ -211,11 +222,7 @@ internal partial class Decoder
         var read = _stream.Read(_fastBuffer, 0, requestSize);
         if (read <= 0)
         {
-            _fastEndOfStream = true;
-            _fastBufferPos = 0;
-            _fastBufferLen = 1;
-            _fastBuffer[0] = 0xFF;
-            return;
+            throw new SharpCompress.Common.IncompleteArchiveException("Unexpected end of stream.");
         }
         _fastBufferPos = 0;
         _fastBufferLen = read;
@@ -238,7 +245,7 @@ internal partial class Decoder
     {
         while (_range < K_TOP_VALUE)
         {
-            _code = (_code << 8) | (byte)_stream.ReadByte();
+            _code = (_code << 8) | ReadRequiredByte();
             _range <<= 8;
             _total++;
         }
@@ -249,7 +256,7 @@ internal partial class Decoder
     {
         if (_range < K_TOP_VALUE)
         {
-            _code = (_code << 8) | (byte)_stream.ReadByte();
+            _code = (_code << 8) | ReadRequiredByte();
             _range <<= 8;
             _total++;
         }
@@ -278,7 +285,7 @@ internal partial class Decoder
 
             if (range < K_TOP_VALUE)
             {
-                code = (code << 8) | (byte)_stream.ReadByte();
+                code = (code << 8) | ReadRequiredByte();
                 range <<= 8;
                 _total++;
             }

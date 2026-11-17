@@ -231,6 +231,10 @@ public partial class Decoder
         RangeCoder.Decoder rangeDecoder
     )
     {
+        if (HasEndMarker)
+        {
+            return true;
+        }
         if (!fastModelsReady)
         {
             CreateFastModel(literalPosBits, literalContextBits);
@@ -456,6 +460,7 @@ public partial class Decoder
                 {
                     if (_rep0 == 0xFFFFFFFF)
                     {
+                        HasEndMarker = true;
                         result = true;
                         break;
                     }

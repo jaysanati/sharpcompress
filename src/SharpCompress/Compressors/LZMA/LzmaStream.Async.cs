@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using SharpCompress.IO;
@@ -159,6 +160,10 @@ public partial class LzmaStream
                 _decoder.SetDecoderProperties(Properties);
             }
 
+            if (_rangeDecoderLimit < 5)
+            {
+                throw new DataErrorException();
+            }
 #if !LEGACY_DOTNET
             await _rangeDecoder
                 .InitLzma2ChunkAsync(
@@ -214,120 +219,146 @@ public partial class LzmaStream
     )
     {
         ThrowIfDisposed();
+        decodeFailure?.Throw();
+        cancellationToken.ThrowIfCancellationRequested();
         if (count > 0)
         {
             EnsureReadMode(ReadMode.Asynchronous);
         }
 
-        if (_endReached)
+        var cancellationCanResume = false;
+        try
         {
-            return 0;
-        }
-
-        var total = 0;
-        while (total < count)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (_availableBytes == 0)
+            if (_endReached)
             {
-                if (_isLzma2)
+                return 0;
+            }
+
+            var total = 0;
+            while (total < count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (_availableBytes == 0)
                 {
-                    await DecodeChunkHeaderAsync(cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    _endReached = true;
-                }
-                if (_endReached)
-                {
-                    break;
-                }
-            }
-
-            if (_availableBytes < 0)
-            {
-                throw new DataErrorException();
-            }
-
-            var toProcess = count - total;
-            if (toProcess > _availableBytes)
-            {
-                toProcess = (int)_availableBytes;
-            }
-#if !LEGACY_DOTNET
-            if (_isLzma2 && !_uncompressedChunk)
-            {
-                // Bound CPU-only work between cancellation checks, even for huge caller buffers.
-                toProcess = Math.Min(toProcess, 16 * 1024);
-            }
-#endif
-
-            _outWindow.SetLimit(toProcess);
-            if (_uncompressedChunk)
-            {
-                _inputPosition += await _outWindow
-                    .CopyStreamAsync(_inputStream, toProcess, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else if (await DecodeBlockAsync(cancellationToken).ConfigureAwait(false))
-            {
-                HandleEndMarker();
-            }
-
-            var read = _outWindow.Read(buffer, offset, toProcess);
-            if (read == 0 && _availableBytes > 0)
-            {
-                throw new DataErrorException();
-            }
-            total += read;
-            offset += read;
-            _position += read;
-            _availableBytes -= read;
-
-            if (_availableBytes == 0 && !_uncompressedChunk)
-            {
-                if (_isLzma2 && _decoder!.HasEndMarker)
-                {
-                    throw new DataErrorException();
-                }
-
-                if (
-                    !_rangeDecoder.IsFinished
-                    || (_rangeDecoderLimit >= 0 && _rangeDecoder._total != _rangeDecoderLimit)
-                )
-                {
-                    _outWindow.SetLimit(toProcess + 1);
-                    if (!await DecodeBlockAsync(cancellationToken).ConfigureAwait(false))
+                    if (_isLzma2)
                     {
-                        _rangeDecoder.ReleaseStream();
-                        throw new DataErrorException();
+                        await DecodeChunkHeaderAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        _endReached = true;
+                    }
+                    if (_endReached)
+                    {
+                        break;
                     }
                 }
 
-                _rangeDecoder.ReleaseStream();
+                if (_availableBytes < 0)
+                {
+                    throw new DataErrorException();
+                }
 
-                _inputPosition += _rangeDecoder._total;
-                if (_outWindow.HasPending)
+                var toProcess = count - total;
+                if (toProcess > _availableBytes)
+                {
+                    toProcess = (int)_availableBytes;
+                }
+#if !LEGACY_DOTNET
+                if (_isLzma2 && !_uncompressedChunk)
+                {
+                    // Bound CPU-only work between cancellation checks, even for huge caller buffers.
+                    toProcess = Math.Min(toProcess, 16 * 1024);
+                }
+#endif
+
+                _outWindow.SetLimit(toProcess);
+                if (_uncompressedChunk)
+                {
+                    _inputPosition += await _outWindow
+                        .CopyStreamAsync(_inputStream, toProcess, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+#if !LEGACY_DOTNET
+                    // A fully buffered chunk can resume if cancellation occurs before
+                    // its CPU decoder starts and this call has not returned any output.
+                    cancellationCanResume = _isLzma2 && _bufferedAsyncChunkReady && total == 0;
+#endif
+                    var endMarker = await DecodeBlockAsync(cancellationToken).ConfigureAwait(false);
+                    cancellationCanResume = false;
+                    if (endMarker)
+                    {
+                        HandleEndMarker();
+                    }
+                }
+
+                var read = _outWindow.Read(buffer, offset, toProcess);
+                if (read == 0 && _availableBytes > 0)
+                {
+                    throw new DataErrorException();
+                }
+                total += read;
+                offset += read;
+                _position += read;
+                _availableBytes -= read;
+
+                if (_availableBytes == 0 && !_uncompressedChunk)
+                {
+                    if (_isLzma2 && _decoder!.HasEndMarker)
+                    {
+                        throw new DataErrorException();
+                    }
+
+                    if (
+                        !_rangeDecoder.IsFinished
+                        || (_rangeDecoderLimit >= 0 && _rangeDecoder._total != _rangeDecoderLimit)
+                    )
+                    {
+                        _outWindow.SetLimit(1);
+                        if (
+                            !await DecodeBlockAsync(cancellationToken).ConfigureAwait(false)
+                            || _isLzma2
+                        )
+                        {
+                            _rangeDecoder.ReleaseStream();
+                            throw new DataErrorException();
+                        }
+                    }
+
+                    _rangeDecoder.ReleaseStream();
+
+                    _inputPosition += _rangeDecoder._total;
+                    if (_outWindow.HasPending)
+                    {
+                        throw new DataErrorException();
+                    }
+                }
+            }
+
+            if (_endReached)
+            {
+                if (_inputSize >= 0 && _inputPosition != _inputSize)
+                {
+                    throw new DataErrorException();
+                }
+                if (_outputSize >= 0 && _position != _outputSize)
                 {
                     throw new DataErrorException();
                 }
             }
-        }
 
-        if (_endReached)
+            return total;
+        }
+        catch (Exception exception)
+            when (exception is not OperationCanceledException || !cancellationCanResume)
         {
-            if (_inputSize >= 0 && _inputPosition != _inputSize)
-            {
-                throw new DataErrorException();
-            }
-            if (_outputSize >= 0 && _position != _outputSize)
-            {
-                throw new DataErrorException();
-            }
+            // Decoder state may have advanced before the failure; never resume it.
+            decodeFailure = ExceptionDispatchInfo.Capture(exception);
+            throw;
         }
-
-        return total;
     }
 
 #if !LEGACY_DOTNET
@@ -337,121 +368,147 @@ public partial class LzmaStream
     )
     {
         ThrowIfDisposed();
+        decodeFailure?.Throw();
+        cancellationToken.ThrowIfCancellationRequested();
         if (!buffer.IsEmpty)
         {
             EnsureReadMode(ReadMode.Asynchronous);
         }
 
-        if (_endReached)
+        var cancellationCanResume = false;
+        try
         {
-            return 0;
-        }
-
-        var total = 0;
-        var offset = 0;
-        var count = buffer.Length;
-        while (total < count)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (_availableBytes == 0)
+            if (_endReached)
             {
-                if (_isLzma2)
+                return 0;
+            }
+
+            var total = 0;
+            var offset = 0;
+            var count = buffer.Length;
+            while (total < count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (_availableBytes == 0)
                 {
-                    await DecodeChunkHeaderAsync(cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    _endReached = true;
-                }
-                if (_endReached)
-                {
-                    break;
-                }
-            }
-
-            if (_availableBytes < 0)
-            {
-                throw new DataErrorException();
-            }
-
-            var toProcess = count - total;
-            if (toProcess > _availableBytes)
-            {
-                toProcess = (int)_availableBytes;
-            }
-#if !LEGACY_DOTNET
-            if (_isLzma2 && !_uncompressedChunk)
-            {
-                toProcess = Math.Min(toProcess, 16 * 1024);
-            }
-#endif
-
-            _outWindow.SetLimit(toProcess);
-            if (_uncompressedChunk)
-            {
-                _inputPosition += await _outWindow
-                    .CopyStreamAsync(_inputStream, toProcess, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else if (await DecodeBlockAsync(cancellationToken).ConfigureAwait(false))
-            {
-                HandleEndMarker();
-            }
-
-            var read = _outWindow.Read(buffer, offset, toProcess);
-            if (read == 0 && _availableBytes > 0)
-            {
-                throw new DataErrorException();
-            }
-            total += read;
-            offset += read;
-            _position += read;
-            _availableBytes -= read;
-
-            if (_availableBytes == 0 && !_uncompressedChunk)
-            {
-                if (_isLzma2 && _decoder!.HasEndMarker)
-                {
-                    throw new DataErrorException();
-                }
-
-                if (
-                    !_rangeDecoder.IsFinished
-                    || (_rangeDecoderLimit >= 0 && _rangeDecoder._total != _rangeDecoderLimit)
-                )
-                {
-                    _outWindow.SetLimit(toProcess + 1);
-                    if (!await DecodeBlockAsync(cancellationToken).ConfigureAwait(false))
+                    if (_isLzma2)
                     {
-                        _rangeDecoder.ReleaseStream();
-                        throw new DataErrorException();
+                        await DecodeChunkHeaderAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        _endReached = true;
+                    }
+                    if (_endReached)
+                    {
+                        break;
                     }
                 }
 
-                _rangeDecoder.ReleaseStream();
+                if (_availableBytes < 0)
+                {
+                    throw new DataErrorException();
+                }
 
-                _inputPosition += _rangeDecoder._total;
-                if (_outWindow.HasPending)
+                var toProcess = count - total;
+                if (toProcess > _availableBytes)
+                {
+                    toProcess = (int)_availableBytes;
+                }
+#if !LEGACY_DOTNET
+                if (_isLzma2 && !_uncompressedChunk)
+                {
+                    toProcess = Math.Min(toProcess, 16 * 1024);
+                }
+#endif
+
+                _outWindow.SetLimit(toProcess);
+                if (_uncompressedChunk)
+                {
+                    _inputPosition += await _outWindow
+                        .CopyStreamAsync(_inputStream, toProcess, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+#if !LEGACY_DOTNET
+                    // A fully buffered chunk can resume if cancellation occurs before
+                    // its CPU decoder starts and this call has not returned any output.
+                    cancellationCanResume = _isLzma2 && _bufferedAsyncChunkReady && total == 0;
+#endif
+                    var endMarker = await DecodeBlockAsync(cancellationToken).ConfigureAwait(false);
+                    cancellationCanResume = false;
+                    if (endMarker)
+                    {
+                        HandleEndMarker();
+                    }
+                }
+
+                var read = _outWindow.Read(buffer, offset, toProcess);
+                if (read == 0 && _availableBytes > 0)
+                {
+                    throw new DataErrorException();
+                }
+                total += read;
+                offset += read;
+                _position += read;
+                _availableBytes -= read;
+
+                if (_availableBytes == 0 && !_uncompressedChunk)
+                {
+                    if (_isLzma2 && _decoder!.HasEndMarker)
+                    {
+                        throw new DataErrorException();
+                    }
+
+                    if (
+                        !_rangeDecoder.IsFinished
+                        || (_rangeDecoderLimit >= 0 && _rangeDecoder._total != _rangeDecoderLimit)
+                    )
+                    {
+                        _outWindow.SetLimit(1);
+                        if (
+                            !await DecodeBlockAsync(cancellationToken).ConfigureAwait(false)
+                            || _isLzma2
+                        )
+                        {
+                            _rangeDecoder.ReleaseStream();
+                            throw new DataErrorException();
+                        }
+                    }
+
+                    _rangeDecoder.ReleaseStream();
+
+                    _inputPosition += _rangeDecoder._total;
+                    if (_outWindow.HasPending)
+                    {
+                        throw new DataErrorException();
+                    }
+                }
+            }
+
+            if (_endReached)
+            {
+                if (_inputSize >= 0 && _inputPosition != _inputSize)
+                {
+                    throw new DataErrorException();
+                }
+                if (_outputSize >= 0 && _position != _outputSize)
                 {
                     throw new DataErrorException();
                 }
             }
-        }
 
-        if (_endReached)
+            return total;
+        }
+        catch (Exception exception)
+            when (exception is not OperationCanceledException || !cancellationCanResume)
         {
-            if (_inputSize >= 0 && _inputPosition != _inputSize)
-            {
-                throw new DataErrorException();
-            }
-            if (_outputSize >= 0 && _position != _outputSize)
-            {
-                throw new DataErrorException();
-            }
+            // Decoder state may have advanced before the failure; never resume it.
+            decodeFailure = ExceptionDispatchInfo.Capture(exception);
+            throw;
         }
-
-        return total;
     }
 #endif
 

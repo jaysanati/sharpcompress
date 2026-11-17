@@ -35,7 +35,7 @@ public partial class SevenZipArchive
         if (_database is null)
         {
             stream.Position = 0;
-            var reader = new ArchiveReader();
+            var reader = new ArchiveReader(maxDecoderMemory: ReaderOptions.MaxDecoderMemory);
             await reader
                 .OpenAsync(stream, lookForHeader: ReaderOptions.LookForHeader, cancellationToken)
                 .ConfigureAwait(false);

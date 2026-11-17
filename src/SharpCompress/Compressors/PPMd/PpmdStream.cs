@@ -80,12 +80,18 @@ public class PpmdStream : Stream, IAsyncDisposable
         if (_properties.Version == PpmdVersion.H)
         {
             _modelH = new ModelPpm();
-            _modelH.DecodeInit(stream, _properties.ModelOrder, _properties.AllocatorSize);
+            if (!_modelH.DecodeInit(stream, _properties.ModelOrder, _properties.AllocatorSize))
+            {
+                throw new DataErrorException();
+            }
         }
         if (_properties.Version == PpmdVersion.H7Z)
         {
             _modelH = new ModelPpm();
-            _modelH.DecodeInit(null, _properties.ModelOrder, _properties.AllocatorSize);
+            if (!_modelH.DecodeInit(null, _properties.ModelOrder, _properties.AllocatorSize))
+            {
+                throw new DataErrorException();
+            }
             _decoder = new Decoder();
             _decoder.Init(stream);
         }
@@ -134,26 +140,36 @@ public class PpmdStream : Stream, IAsyncDisposable
             else if (properties.Version == PpmdVersion.H)
             {
                 instance._modelH = new ModelPpm();
-                await instance
-                    ._modelH.DecodeInitAsync(
-                        stream,
-                        properties.ModelOrder,
-                        properties.AllocatorSize,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                if (
+                    !await instance
+                        ._modelH.DecodeInitAsync(
+                            stream,
+                            properties.ModelOrder,
+                            properties.AllocatorSize,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                {
+                    throw new DataErrorException();
+                }
             }
             else if (properties.Version == PpmdVersion.H7Z)
             {
                 instance._modelH = new ModelPpm();
-                await instance
-                    ._modelH.DecodeInitAsync(
-                        null,
-                        properties.ModelOrder,
-                        properties.AllocatorSize,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                if (
+                    !await instance
+                        ._modelH.DecodeInitAsync(
+                            null,
+                            properties.ModelOrder,
+                            properties.AllocatorSize,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                {
+                    throw new DataErrorException();
+                }
                 instance._decoder = new Decoder();
                 await instance._decoder.InitAsync(stream, cancellationToken).ConfigureAwait(false);
             }

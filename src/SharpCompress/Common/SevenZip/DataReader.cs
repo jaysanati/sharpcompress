@@ -45,6 +45,8 @@ internal class DataReader
 
     public int Offset { get; private set; }
 
+    internal int Remaining => _ending - Offset;
+
     public byte ReadByte()
     {
         if (Offset >= _ending)

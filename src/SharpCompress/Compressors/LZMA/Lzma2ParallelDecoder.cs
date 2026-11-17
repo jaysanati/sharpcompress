@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 #if !LEGACY_DOTNET
 using Microsoft.Win32.SafeHandles;
@@ -58,7 +59,8 @@ internal static class Lzma2ParallelDecoder
         Stream packStream,
         long packStart,
         long packSize,
-        long unpackSize
+        long unpackSize,
+        CancellationToken cancellationToken = default
     )
     {
         try
@@ -79,6 +81,7 @@ internal static class Lzma2ParallelDecoder
 
             while (packPos < packSize)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var chunkPackStart = packPos;
                 var control = packStream.ReadByte();
                 if (control < 0)
@@ -168,8 +171,12 @@ internal static class Lzma2ParallelDecoder
                     return null; // chunk claims more pack bytes than the folder actually has
                 }
                 packStream.Seek(chunkPackPayload, SeekOrigin.Current);
-                unpackPos += chunkUnpackSize;
-                blockUnpackSize += chunkUnpackSize;
+                if (chunkUnpackSize > unpackSize - unpackPos)
+                {
+                    return null;
+                }
+                unpackPos = checked(unpackPos + chunkUnpackSize);
+                blockUnpackSize = checked(blockUnpackSize + chunkUnpackSize);
                 blockHasContent = true;
             }
 
@@ -192,11 +199,23 @@ internal static class Lzma2ParallelDecoder
 
             return blocks;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception)
         {
             return null;
         }
     }
+
+    // A materialization policy, not a format constraint: callers fall back to streaming
+    // for highly compressible valid data instead of pre-sizing a huge temporary file.
+    internal static bool CanMaterialize(long packSize, long unpackSize) =>
+        packSize >= 0
+        && unpackSize >= 0
+        && unpackSize <= (1L << 30)
+        && (unpackSize <= (16L << 20) || (unpackSize - (16L << 20) + 1023) / 1024 <= packSize);
 
     private static bool ReadFully(Stream stream, Span<byte> buffer)
     {
@@ -226,7 +245,8 @@ internal static class Lzma2ParallelDecoder
         long packStart,
         IReadOnlyList<Lzma2Block> blocks,
         SafeFileHandle outputHandle,
-        int maxDegreeOfParallelism
+        int maxDegreeOfParallelism,
+        CancellationToken cancellationToken = default
     ) =>
         DecodeBlocksParallel(
             inputHandle,
@@ -235,7 +255,8 @@ internal static class Lzma2ParallelDecoder
             blocks,
             outputHandle,
             maxDegreeOfParallelism,
-            ArrayPool<byte>.Shared
+            ArrayPool<byte>.Shared,
+            cancellationToken
         );
 
     internal static void DecodeBlocksParallel(
@@ -245,14 +266,19 @@ internal static class Lzma2ParallelDecoder
         IReadOnlyList<Lzma2Block> blocks,
         SafeFileHandle outputHandle,
         int maxDegreeOfParallelism,
-        ArrayPool<byte> bufferPool
+        ArrayPool<byte> bufferPool,
+        CancellationToken cancellationToken = default
     )
     {
         ThrowHelper.ThrowIfNull(bufferPool);
 
         Parallel.ForEach(
             blocks,
-            new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism },
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = maxDegreeOfParallelism,
+                CancellationToken = cancellationToken,
+            },
             block =>
             {
                 using var packStream = new RandomAccessBlockStream(
@@ -278,6 +304,7 @@ internal static class Lzma2ParallelDecoder
                     long total = 0;
                     while (total < block.UnpackLen)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         var toRead = (int)Math.Min(bufferSize, block.UnpackLen - total);
                         var read = lzma.Read(buffer, 0, toRead);
                         if (read <= 0)

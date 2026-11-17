@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using SharpCompress.Common;
 using SharpCompress.Compressors.PPMd.I1;
 
 namespace SharpCompress.Compressors.PPMd;
@@ -45,8 +46,24 @@ public class PpmdProperties
         else if (properties.Length == 5)
         {
             Version = PpmdVersion.H7Z;
-            AllocatorSize = BinaryPrimitives.ReadInt32LittleEndian(properties.Slice(1));
+            var memory = BinaryPrimitives.ReadUInt32LittleEndian(properties.Slice(1));
             ModelOrder = properties[0];
+            // 7-Zip C/Ppmd7.h: PPMD7_MIN/MAX_ORDER and PPMD7_MIN/MAX_MEM_SIZE.
+            if (ModelOrder < 2 || ModelOrder > 64 || memory < 2048 || memory > uint.MaxValue - 36)
+            {
+                throw new InvalidFormatException("Invalid 7z PPMd properties.");
+            }
+            if (memory > int.MaxValue)
+            {
+                throw new NotSupportedException(
+                    "PPMd memory exceeds the managed allocator capacity."
+                );
+            }
+            AllocatorSize = (int)memory;
+        }
+        else
+        {
+            throw new InvalidFormatException("Invalid PPMd property length.");
         }
     }
 

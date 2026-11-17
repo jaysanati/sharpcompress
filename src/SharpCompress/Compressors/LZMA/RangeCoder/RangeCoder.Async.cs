@@ -124,8 +124,8 @@ internal partial class Decoder
         _fastLimit = compressedSize;
         _fastBufferPos = 5;
         _fastBufferLen = compressedSize;
-        // A corrupt payload may request more range bytes. Preserve the fast decoder's
-        // EOF sentinel behavior, but never fetch those bytes from a following chunk.
+        // A corrupt payload may request more range bytes. Fail at this payload's end
+        // instead of fetching bytes from a following chunk.
         _fastEndOfStream = true;
         _fastBufferSafeUnbounded = false;
     }

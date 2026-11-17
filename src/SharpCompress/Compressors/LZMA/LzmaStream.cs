@@ -2,8 +2,10 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.IO;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using SharpCompress.Common;
 using SharpCompress.Compressors.LZMA.LZ;
 using SharpCompress.IO;
 
@@ -52,6 +54,7 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
     }
 
     private bool _isDisposed;
+    private ExceptionDispatchInfo? decodeFailure;
     private ReadMode _readMode;
 
     private enum ReadMode
@@ -70,6 +73,10 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         bool leaveOpen = false
     )
     {
+        if (properties.Length != (isLzma2 ? 1 : 5))
+        {
+            throw new InvalidFormatException("Invalid LZMA coder property length.");
+        }
         _inputStream = inputStream;
         _inputSize = inputSize;
         _outputSize = outputSize;
@@ -356,196 +363,129 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
     public override int Read(byte[] buffer, int offset, int count)
     {
         ThrowIfDisposed();
+        decodeFailure?.Throw();
         if (count > 0)
         {
             EnsureReadMode(ReadMode.Synchronous);
         }
 
-        if (_endReached)
+        try
         {
-            return 0;
-        }
-
-        var total = 0;
-        while (total < count)
-        {
-            if (_availableBytes == 0)
+            if (_endReached)
             {
-                if (_isLzma2)
+                return 0;
+            }
+
+            var total = 0;
+            while (total < count)
+            {
+                if (_availableBytes == 0)
                 {
-                    DecodeChunkHeader();
-                }
-                else
-                {
-                    _endReached = true;
-                }
-                if (_endReached)
-                {
-                    break;
-                }
-            }
-
-            if (_availableBytes < 0)
-            {
-                throw new DataErrorException();
-            }
-
-            var toProcess = count - total;
-            if (toProcess > _availableBytes)
-            {
-                toProcess = (int)_availableBytes;
-            }
-
-            _outWindow.SetLimit(toProcess);
-            if (_uncompressedChunk)
-            {
-                _inputPosition += _outWindow.CopyStream(_inputStream, toProcess);
-            }
-            else if (_decoder!.Code(_dictionarySize, _outWindow, _rangeDecoder))
-            {
-                HandleEndMarker();
-            }
-
-            var read = _outWindow.Read(buffer, offset, toProcess);
-            // Unknown-size raw LZMA can end without output; otherwise no progress is corruption.
-            if (read == 0 && _availableBytes > 0)
-            {
-                throw new DataErrorException();
-            }
-            total += read;
-            offset += read;
-            _position += read;
-            _availableBytes -= read;
-
-            if (_availableBytes == 0 && !_uncompressedChunk)
-            {
-                if (_isLzma2 && _decoder!.HasEndMarker)
-                {
-                    throw new DataErrorException();
-                }
-
-                // Check range corruption scenario
-                if (
-                    !_rangeDecoder.IsFinished
-                    || (_rangeDecoderLimit >= 0 && _rangeDecoder._total != _rangeDecoderLimit)
-                )
-                {
-                    // Stream might have End Of Stream marker
-                    _outWindow.SetLimit(toProcess + 1);
-                    if (!_decoder!.Code(_dictionarySize, _outWindow, _rangeDecoder))
+                    if (_isLzma2)
                     {
-                        _rangeDecoder.ReleaseStream();
-                        throw new DataErrorException();
+                        DecodeChunkHeader();
+                    }
+                    else
+                    {
+                        _endReached = true;
+                    }
+                    if (_endReached)
+                    {
+                        break;
                     }
                 }
 
-                _rangeDecoder.ReleaseStream();
+                if (_availableBytes < 0)
+                {
+                    throw new DataErrorException();
+                }
 
-                _inputPosition += _rangeDecoder._total;
-                if (_outWindow.HasPending)
+                var toProcess = count - total;
+                if (toProcess > _availableBytes)
+                {
+                    toProcess = (int)_availableBytes;
+                }
+
+                _outWindow.SetLimit(toProcess);
+                if (_uncompressedChunk)
+                {
+                    _inputPosition += _outWindow.CopyStream(_inputStream, toProcess);
+                }
+                else if (_decoder!.Code(_dictionarySize, _outWindow, _rangeDecoder))
+                {
+                    HandleEndMarker();
+                }
+
+                var read = _outWindow.Read(buffer, offset, toProcess);
+                // Unknown-size raw LZMA can end without output; otherwise no progress is corruption.
+                if (read == 0 && _availableBytes > 0)
+                {
+                    throw new DataErrorException();
+                }
+                total += read;
+                offset += read;
+                _position += read;
+                _availableBytes -= read;
+
+                if (_availableBytes == 0 && !_uncompressedChunk)
+                {
+                    if (_isLzma2 && _decoder!.HasEndMarker)
+                    {
+                        throw new DataErrorException();
+                    }
+
+                    // Check range corruption scenario
+                    if (
+                        !_rangeDecoder.IsFinished
+                        || (_rangeDecoderLimit >= 0 && _rangeDecoder._total != _rangeDecoderLimit)
+                    )
+                    {
+                        // Stream might have End Of Stream marker
+                        _outWindow.SetLimit(1);
+                        if (!_decoder!.Code(_dictionarySize, _outWindow, _rangeDecoder) || _isLzma2)
+                        {
+                            _rangeDecoder.ReleaseStream();
+                            throw new DataErrorException();
+                        }
+                    }
+
+                    _rangeDecoder.ReleaseStream();
+
+                    _inputPosition += _rangeDecoder._total;
+                    if (_outWindow.HasPending)
+                    {
+                        throw new DataErrorException();
+                    }
+                }
+            }
+
+            if (_endReached)
+            {
+                if (_inputSize >= 0 && _inputPosition != _inputSize)
+                {
+                    throw new DataErrorException();
+                }
+                if (_outputSize >= 0 && _position != _outputSize)
                 {
                     throw new DataErrorException();
                 }
             }
-        }
 
-        if (_endReached)
+            return total;
+        }
+        catch (Exception exception)
         {
-            if (_inputSize >= 0 && _inputPosition != _inputSize)
-            {
-                throw new DataErrorException();
-            }
-            if (_outputSize >= 0 && _position != _outputSize)
-            {
-                throw new DataErrorException();
-            }
+            // Decoder state may have advanced before the failure; never resume it.
+            decodeFailure = ExceptionDispatchInfo.Capture(exception);
+            throw;
         }
-
-        return total;
     }
 
     public override int ReadByte()
     {
         ThrowIfDisposed();
-        EnsureReadMode(ReadMode.Synchronous);
-
-        if (_endReached)
-        {
-            return -1;
-        }
-
-        if (_availableBytes == 0)
-        {
-            if (_isLzma2)
-            {
-                DecodeChunkHeader();
-            }
-            else
-            {
-                _endReached = true;
-            }
-        }
-
-        if (_endReached)
-        {
-            if (_inputSize >= 0 && _inputPosition != _inputSize)
-            {
-                throw new DataErrorException();
-            }
-            if (_outputSize >= 0 && _position != _outputSize)
-            {
-                throw new DataErrorException();
-            }
-
-            return -1;
-        }
-
-        _outWindow.SetLimit(1);
-        if (_uncompressedChunk)
-        {
-            _inputPosition += _outWindow.CopyStream(_inputStream, 1);
-        }
-        else if (_decoder!.Code(_dictionarySize, _outWindow, _rangeDecoder))
-        {
-            HandleEndMarker();
-        }
-
-        var value = _outWindow.ReadByte();
-        _position++;
-        _availableBytes--;
-
-        if (_availableBytes == 0 && !_uncompressedChunk)
-        {
-            if (_isLzma2 && _decoder!.HasEndMarker)
-            {
-                throw new DataErrorException();
-            }
-
-            // Check range corruption scenario
-            if (
-                !_rangeDecoder.IsFinished
-                || (_rangeDecoderLimit >= 0 && _rangeDecoder._total != _rangeDecoderLimit)
-            )
-            {
-                // Stream might have End Of Stream marker
-                _outWindow.SetLimit(2);
-                if (!_decoder!.Code(_dictionarySize, _outWindow, _rangeDecoder))
-                {
-                    _rangeDecoder.ReleaseStream();
-                    throw new DataErrorException();
-                }
-            }
-
-            _rangeDecoder.ReleaseStream();
-
-            _inputPosition += _rangeDecoder._total;
-            if (_outWindow.HasPending)
-            {
-                throw new DataErrorException();
-            }
-        }
-
-        return value;
+        var buffer = GetAsyncHeaderBuffer();
+        return Read(buffer, 0, 1) == 0 ? -1 : buffer[0];
     }
 
     private void EnsureReadMode(ReadMode readMode)
@@ -580,7 +520,7 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
     {
         // A properties byte encodes (pb * 5 + lp) * 9 + lc with pb <= 4; a larger value is
         // corrupt stream data, not an invalid caller argument.
-        if (properties >= 9 * 5 * 5)
+        if (properties >= 9 * 5 * 5 || properties % 9 + properties / 9 % 5 > 4)
         {
             throw new DataErrorException();
         }
@@ -641,6 +581,10 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
                 _decoder.SetDecoderProperties(Properties);
             }
 
+            if (_rangeDecoderLimit < 5)
+            {
+                throw new DataErrorException();
+            }
             _rangeDecoder.Init(_inputStream);
 #if !LEGACY_DOTNET
             // LZMA2 chunks share one underlying stream with the raw chunk-header bytes read
@@ -668,6 +612,10 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
             throw new DataErrorException();
         }
 
+        if (_outputSize >= 0 && _availableBytes != _outWindow.AvailableBytes)
+        {
+            throw new DataErrorException();
+        }
         if (_outputSize < 0)
         {
             _availableBytes = _outWindow.AvailableBytes;

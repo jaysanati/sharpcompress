@@ -24,6 +24,7 @@ internal static partial class DecoderRegistry
         CancellationToken cancellationToken
     )
     {
+        ValidateProperties(id, info);
         switch (id._id)
         {
             case K_COPY:
@@ -45,7 +46,7 @@ internal static partial class DecoderRegistry
                         -1,
                         limit,
                         null,
-                        info.NotNull().Length < 5,
+                        id._id == K_LZMA2,
                         false
                     )
                     .ConfigureAwait(false);

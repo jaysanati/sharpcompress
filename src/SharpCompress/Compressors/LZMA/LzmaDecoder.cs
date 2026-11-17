@@ -12,7 +12,7 @@ namespace SharpCompress.Compressors.LZMA;
 
 public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
 {
-    internal bool HasEndMarker => _rep0 == uint.MaxValue;
+    internal bool HasEndMarker { get; private set; }
 
     public void Dispose()
     {
@@ -409,6 +409,10 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
 #else
     internal bool Code(int dictionarySize, OutWindow outWindow, RangeCoder.Decoder rangeDecoder)
     {
+        if (HasEndMarker)
+        {
+            return true;
+        }
         EnsureScalarModels();
         var dictionarySizeCheck = Math.Max(dictionarySize, 1);
 
@@ -423,9 +427,13 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
             )
             {
                 byte b;
-                var prevByte = outWindow.GetByte(0);
+                var prevByte = outWindow.Total == 0 ? (byte)0 : outWindow.GetByte(0);
                 if (!_state.IsCharState())
                 {
+                    if (_rep0 >= outWindow.Total || _rep0 >= dictionarySizeCheck)
+                    {
+                        throw new DataErrorException();
+                    }
                     b = _literalDecoder.DecodeWithMatchByte(
                         rangeDecoder,
                         (uint)outWindow.Total,
@@ -454,6 +462,10 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
                                 .Decode(rangeDecoder) == 0
                         )
                         {
+                            if (_rep0 >= outWindow.Total || _rep0 >= dictionarySizeCheck)
+                            {
+                                throw new DataErrorException();
+                            }
                             _state.UpdateShortRep();
                             outWindow.PutByte(outWindow.GetByte((int)_rep0));
                             continue;
@@ -524,6 +536,7 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
                 {
                     if (_rep0 == 0xFFFFFFFF)
                     {
+                        HasEndMarker = true;
                         return true;
                     }
                     throw new DataErrorException();
@@ -560,6 +573,7 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
         scalarModelsReady = false;
         _state.Init();
         _rep0 = _rep1 = _rep2 = _rep3 = 0;
+        HasEndMarker = false;
 #if !LEGACY_DOTNET
         fastModelsReady = false;
 #endif

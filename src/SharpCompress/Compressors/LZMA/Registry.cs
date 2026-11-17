@@ -1,6 +1,8 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
+using SharpCompress.Common;
 using SharpCompress.Common.SevenZip;
 using SharpCompress.Compressors.BZip2;
 using SharpCompress.Compressors.Deflate;
@@ -31,6 +33,44 @@ internal static partial class DecoderRegistry
     private const uint K_B_ZIP2 = 0x040202;
     private const uint K_ZSTD = 0x4F71101;
 
+    internal static void ValidateProperties(
+        CMethodId id,
+        byte[]? info,
+        long? maxDecoderMemory = null
+    )
+    {
+        var length = id._id switch
+        {
+            K_LZMA => 5,
+            K_LZMA2 or K_DELTA => 1,
+            K_PPMD => 5,
+            _ => -1,
+        };
+        if (length >= 0 && (info is null || info.Length != length))
+        {
+            throw new InvalidFormatException("Invalid 7z coder property length.");
+        }
+        long memory = 0;
+        if (id._id == K_PPMD)
+        {
+            memory = new PpmdProperties(info!).AllocatorSize;
+        }
+        else if (id._id == K_LZMA)
+        {
+            memory = BinaryPrimitives.ReadUInt32LittleEndian(info!.AsSpan(1));
+        }
+        else if (id._id == K_LZMA2 && info![0] <= 40)
+        {
+            memory = info[0] == 40 ? uint.MaxValue : (2L | (info[0] & 1)) << ((info[0] >> 1) + 11);
+        }
+        if (maxDecoderMemory is long maximum && memory > maximum)
+        {
+            throw new NotSupportedException(
+                "7z decoder memory exceeds ReaderOptions.MaxDecoderMemory."
+            );
+        }
+    }
+
     internal static Stream CreateDecoderStream(
         CMethodId id,
         Stream[] inStreams,
@@ -39,6 +79,7 @@ internal static partial class DecoderRegistry
         long limit
     )
     {
+        ValidateProperties(id, info);
         switch (id._id)
         {
             case K_COPY:
@@ -53,7 +94,14 @@ internal static partial class DecoderRegistry
                 return new DeltaFilter(false, inStreams.Single(), info.NotNull());
             case K_LZMA:
             case K_LZMA2:
-                return LzmaStream.Create(info.NotNull(), inStreams.Single(), -1, limit);
+                return LzmaStream.Create(
+                    info.NotNull(),
+                    inStreams.Single(),
+                    -1,
+                    limit,
+                    null,
+                    id._id == K_LZMA2
+                );
             case CMethodId.K_AES_ID:
                 return new AesDecoderStream(inStreams.Single(), info.NotNull(), pass, limit);
             case K_BCJ:

@@ -74,6 +74,7 @@ internal partial class OutWindow : IDisposable
         {
             // Allocate first so failed growth leaves the existing buffer owned by this window.
             var replacement = _pool.Rent(Math.Min(windowSize, 4096));
+            replacement.AsSpan().Clear();
             if (_buffer is not null)
             {
                 _pool.Return(_buffer);
@@ -97,6 +98,7 @@ internal partial class OutWindow : IDisposable
         // Grow from emitted history, never from the advertised dictionary or output size.
         var capacity = (int)Math.Min(_windowSize, Math.Max(required, (long)_buffer.Length * 2));
         var replacement = _pool.Rent(capacity);
+        replacement.AsSpan().Clear();
         _buffer.AsSpan(0, _pos).CopyTo(replacement);
         _pool.Return(_buffer);
         _buffer = replacement;

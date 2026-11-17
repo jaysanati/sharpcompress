@@ -368,6 +368,28 @@ await writer.WriteAllAsync("C:\\source", "*", SearchOption.AllDirectories, cance
 
 ## Common Options
 
+### Decoder memory limits (7z)
+
+`ReaderOptions` adds `public long? MaxDecoderMemory { get; set; }` (default `null`).
+Set it to a byte limit for each 7z PPMd allocator or LZMA/LZMA2 dictionary declared
+in metadata, including encoded headers. The check runs while metadata is read,
+before decoder buffers are rented, in both sync and async archive APIs.
+Exceeding the limit throws `NotSupportedException`. This is not an aggregate
+memory limit: pools, model tables, parallel workers, and other formats are not covered.
+
+Malformed 7z PPMd properties throw `InvalidFormatException`. SDK-valid PPMd
+memory sizes that exceed the managed allocator's capacity throw `NotSupportedException`.
+The option does not expand the decoder's supported allocation range.
+
+```csharp
+var options = new ReaderOptions
+{
+    LeaveStreamOpen = true,
+    MaxDecoderMemory = 64L * 1024 * 1024,
+};
+using var archive = ArchiveFactory.OpenArchive(stream, options);
+```
+
 ### ReaderOptions
 
 Use preset properties and fluent helpers for common configurations:

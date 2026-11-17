@@ -14,6 +14,10 @@ internal class DeltaFilter : Filter
     public DeltaFilter(bool isEncoder, Stream baseStream, byte[] info)
         : base(isEncoder, baseStream, 1)
     {
+        if (info.Length != 1)
+        {
+            throw new SharpCompress.Common.InvalidFormatException("Invalid Delta property length.");
+        }
         _distance = info[0];
         _history = new byte[DISTANCE_MAX];
         _position = 0;

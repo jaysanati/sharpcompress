@@ -128,27 +128,14 @@ public class LzmaDecoderSafetyTests
     }
 
     [Fact]
-    public void FastDecoderRetryAfterCorruptionRejectsInvalidDistance()
+    public void DecoderRetryAfterCorruptionRethrowsOriginalFailure()
     {
         using var input = CreateInput(true);
         using var stream = LzmaStream.Create(new byte[] { 0 }, input, leaveOpen: true);
-        Assert.Throws<DataErrorException>(() => Drain(stream, new byte[65536]));
-
-        // Exercise the unsafe decoder directly after corruption to verify its bounds checks.
-        var decoder = GetField<Decoder>(stream, "_decoder");
-        var window = GetField<OutWindow>(stream, "_outWindow");
-        var range = GetField<SharpCompress.Compressors.LZMA.RangeCoder.Decoder>(
-            stream,
-            "_rangeDecoder"
-        );
-        try
-        {
-            Assert.Throws<DataErrorException>(() => decoder.CodeFast(4096, window, range));
-        }
-        finally
-        {
-            range.ReleaseStream();
-        }
+        var first = Assert.Throws<DataErrorException>(() => Drain(stream, new byte[65536]));
+        // Property validation may fail before constructing a decoder. Every retry must
+        // rethrow that failure without trying to continue partially initialized state.
+        Assert.Same(first, Assert.Throws<DataErrorException>(() => Drain(stream, new byte[65536])));
     }
 
     [Theory]

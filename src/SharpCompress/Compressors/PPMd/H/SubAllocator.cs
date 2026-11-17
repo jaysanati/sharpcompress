@@ -161,7 +161,12 @@ internal class SubAllocator : IDisposable
             return true;
         }
         StopSubAllocator();
-        var allocSize = (t / FIXED_UNIT_SIZE * UNIT_SIZE) + UNIT_SIZE;
+        var allocation = ((long)t / FIXED_UNIT_SIZE * UNIT_SIZE) + UNIT_SIZE;
+        if (t < 0 || allocation + 1 + 4 * N_INDEXES + RarMemBlock.SIZE > int.MaxValue)
+        {
+            throw new NotSupportedException("PPMd memory exceeds the managed allocator capacity.");
+        }
+        var allocSize = (int)allocation;
 
         // adding space for freelist (needed for poiters)
         // 1+ for null pointer

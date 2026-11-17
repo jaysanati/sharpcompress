@@ -187,6 +187,10 @@ public partial class Decoder : IAsyncDisposable
         CancellationToken cancellationToken = default
     )
     {
+        if (HasEndMarker)
+        {
+            return true;
+        }
         EnsureScalarModels();
         var dictionarySizeCheck = Math.Max(dictionarySize, 1);
 
@@ -204,9 +208,13 @@ public partial class Decoder : IAsyncDisposable
             )
             {
                 byte b;
-                var prevByte = outWindow.GetByte(0);
+                var prevByte = outWindow.Total == 0 ? (byte)0 : outWindow.GetByte(0);
                 if (!_state.IsCharState())
                 {
+                    if (_rep0 >= outWindow.Total || _rep0 >= dictionarySizeCheck)
+                    {
+                        throw new DataErrorException();
+                    }
                     b = await _literalDecoder
                         .DecodeWithMatchByteAsync(
                             rangeDecoder,
@@ -254,6 +262,10 @@ public partial class Decoder : IAsyncDisposable
                                 .ConfigureAwait(false) == 0
                         )
                         {
+                            if (_rep0 >= outWindow.Total || _rep0 >= dictionarySizeCheck)
+                            {
+                                throw new DataErrorException();
+                            }
                             _state.UpdateShortRep();
                             await outWindow
                                 .PutByteAsync(outWindow.GetByte((int)_rep0), cancellationToken)
@@ -352,6 +364,7 @@ public partial class Decoder : IAsyncDisposable
                 {
                     if (_rep0 == 0xFFFFFFFF)
                     {
+                        HasEndMarker = true;
                         return true;
                     }
                     throw new DataErrorException();

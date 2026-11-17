@@ -217,11 +217,37 @@ internal sealed partial class ArchiveReader
                 // header fails; its source stream remains borrowed.
                 await using var decoderScope = outStream.DisposeAsyncScope().ConfigureAwait(false);
 
-                var unpackSize = checked((int)folder.GetUnpackSize());
-                var data = new byte[unpackSize];
-                await outStream
-                    .ReadExactAsync(data, 0, data.Length, cancellationToken)
-                    .ConfigureAwait(false);
+                var expectedSize = folder.GetUnpackSize();
+                if (expectedSize < 0 || expectedSize > int.MaxValue)
+                {
+                    throw new InvalidFormatException("Decoded header is too large.");
+                }
+                using var decodedHeader = new MemoryStream();
+                var buffer = new byte[8192];
+                long remaining = expectedSize;
+                while (remaining > 0)
+                {
+                    var read = await outStream
+                        .ReadAsync(
+                            buffer,
+                            0,
+                            (int)Math.Min(buffer.Length, remaining),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        throw new InvalidFormatException(
+                            "Decoded header ended before its declared size."
+                        );
+                    }
+                    await decodedHeader
+                        .WriteAsync(buffer, 0, read, cancellationToken)
+                        .ConfigureAwait(false);
+                    remaining -= read;
+                }
+                var data = decodedHeader.ToArray();
+                var unpackSize = data.Length;
                 if (
                     await outStream
                         .ReadAsync(new byte[1], 0, 1, cancellationToken)
@@ -231,6 +257,7 @@ internal sealed partial class ArchiveReader
                     throw new InvalidFormatException("Decoded stream is longer than expected.");
                 }
                 dataVector.Add(data);
+                packIndex += myPackSizes.Length;
 
                 if (folder.UnpackCrcDefined)
                 {
@@ -327,6 +354,7 @@ internal sealed partial class ArchiveReader
             }
 
             var numFiles = ReadNum();
+            ValidateFileCount(numFiles, unpackSizes.Count);
             db._files = new List<CFileItem>(numFiles);
             for (var i = 0; i < numFiles; i++)
             {
@@ -458,6 +486,13 @@ internal sealed partial class ArchiveReader
                 }
             }
 
+            if (
+                numFiles - numEmptyStreams != unpackSizes.Count
+                || digests.Count != unpackSizes.Count
+            )
+            {
+                throw new InvalidFormatException("7z files do not match the substreams.");
+            }
             var emptyFileIndex = 0;
             var sizeIndex = 0;
             for (var i = 0; i < numFiles; i++)
