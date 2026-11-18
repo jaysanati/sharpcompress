@@ -151,7 +151,7 @@ public abstract partial class AbstractReader<TEntry, TVolume> : IReader, IAsyncR
 
     private void SkipEntry()
     {
-        if (!Entry.IsDirectory && Entry is not SharpCompress.Common.Rar.RarEntry { IsRedir: true })
+        if (Entry.HasData && Entry is not SharpCompress.Common.Rar.RarEntry { IsRedir: true })
         {
             Skip();
         }

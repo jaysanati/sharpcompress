@@ -22,8 +22,8 @@ public abstract partial class RarReader : AbstractReader<RarReaderEntry, RarVolu
     internal RarReader(ReaderOptions options)
         : base(options, ArchiveType.Rar)
     {
-        UnpackV2017 = new(() => new Compressors.Rar.UnpackV2017.Unpack(options.MaxDecoderMemory));
-        UnpackV1 = new(() => new Compressors.Rar.UnpackV1.Unpack(options.MaxDecoderMemory));
+        UnpackV2017 = new(() => new Compressors.Rar.UnpackV2017.Unpack());
+        UnpackV1 = new(() => new Compressors.Rar.UnpackV1.Unpack());
     }
 
     public override void Dispose()

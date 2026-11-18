@@ -158,7 +158,7 @@ public class TarHeaderParsingTests
             Assert.Equal(expectedName, entry.Key);
             Assert.Equal(expectedLink, entry.LinkTarget);
             Assert.Equal(mode, entry.Mode);
-            Assert.Equal(uid, entry.UserID);
+            Assert.Equal(uid, entry.UserId);
             Assert.Equal(gid, entry.GroupId);
             Assert.Equal(time, entry.LastModifiedTime);
             Assert.Equal(1, entry.Size);
@@ -282,8 +282,8 @@ public class TarHeaderParsingTests
             using var reader = new BinaryReader(stream);
             Assert.True(header.Read(reader));
         }
-        Assert.Equal(1L << 48, header.UserId);
-        Assert.Equal(-1, header.GroupId);
+        Assert.Equal(1L << 48, header.Metadata?.UserId);
+        Assert.Equal(-1, header.Metadata?.GroupId);
         Assert.Equal(123, header.DeviceMajor);
         Assert.Equal(-456, header.DeviceMinor);
         Assert.Equal(TarHeader.EPOCH.ToLocalTime(), header.LastModifiedTime);

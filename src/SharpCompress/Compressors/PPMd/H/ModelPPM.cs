@@ -235,8 +235,6 @@ internal class ModelPpm : IDisposable
         //medContext = null;
     }
 
-    internal long? MaxDecoderMemory { get; set; }
-
     private void StopModel()
     {
         _minContext = null;
@@ -247,12 +245,6 @@ internal class ModelPpm : IDisposable
 
     private void StartRarAllocator(int memory)
     {
-        if (MaxDecoderMemory is long maximum && memory > maximum)
-        {
-            throw new NotSupportedException(
-                "RAR PPMd memory exceeds ReaderOptions.MaxDecoderMemory."
-            );
-        }
         SubAlloc.StartSubAllocator(memory);
     }
 

@@ -36,10 +36,8 @@ public partial class RarArchive
     private RarArchive(SourceStream sourceStream)
         : base(ArchiveType.Rar, sourceStream)
     {
-        UnpackV2017 = new(() =>
-            new Compressors.Rar.UnpackV2017.Unpack(ReaderOptions.MaxDecoderMemory)
-        );
-        UnpackV1 = new(() => new Compressors.Rar.UnpackV1.Unpack(ReaderOptions.MaxDecoderMemory));
+        UnpackV2017 = new(() => new Compressors.Rar.UnpackV2017.Unpack());
+        UnpackV1 = new(() => new Compressors.Rar.UnpackV1.Unpack());
     }
 
     public override void Dispose()

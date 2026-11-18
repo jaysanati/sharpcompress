@@ -167,6 +167,10 @@ internal sealed class ChecksumValidationStream : Stream
 
     private void UpdateChecksum(ReadOnlySpan<byte> buffer)
     {
+        if (!_checksum.IsAvailable)
+        {
+            return;
+        }
         switch (_checksum.Kind)
         {
             case ChecksumKind.Crc32:
@@ -181,7 +185,9 @@ internal sealed class ChecksumValidationStream : Stream
 
     private void Validate()
     {
-        if (_validated)
+        // A missing checksum still requires size validation, but default(Crc32)
+        // must not be mistaken for a stored checksum of zero.
+        if (_validated || !_checksum.IsAvailable)
         {
             return;
         }

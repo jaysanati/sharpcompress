@@ -210,6 +210,21 @@ var options2 = new WriterOptions(CompressionType.Deflate)
 
 `WriterOptions.BufferSize` controls stream copy buffers used while writing archive entries. If it is not set, SharpCompress falls back to `Constants.BufferSize`.
 
+`TarArchive.SaveTo` and `SaveToAsync` preserve existing file/directory permission bits
+(including zero permissions and special bits) and numeric owner/group IDs. Newly added
+entries and public `TarWriter` writes default to mode `0777` and owner/group `0/0`.
+USTAR output rejects owner/group IDs outside `0`–`2097151`; use GNU output for larger IDs.
+See [Tar metadata handling](TAR_SPEC.md#metadata-surface) for compatibility details.
+
+`TarEntry.Mode`, `UserId`, and `GroupId` are `long?`: `null` means unspecified,
+while zero is an explicit mode or owner/group ID. Newly added entries expose `null`
+until saved and reopened; serialization supplies the defaults without changing the
+in-memory properties.
+
+**Breaking change:** `UserID` has been renamed to `UserId`, and these three properties
+now return `long?` instead of `long`. Update property references and handle missing
+values explicitly, for example `long userId = entry.UserId ?? 0;`.
+
 ---
 
 ## Archive API Methods
@@ -404,39 +419,56 @@ await writer.WriteAllAsync("C:\\source", "*", SearchOption.AllDirectories, cance
 
 ## Common Options
 
-### Decoder memory limits (7z and RAR)
+### Decompression dictionary limits
 
-`ReaderOptions` adds `public long? MaxDecoderMemory { get; set; }` (default `null`).
-Set it to a byte limit for each 7z PPMd allocator or LZMA/LZMA2 dictionary declared
-in metadata, including encoded headers. The check runs while metadata is read,
-before decoder buffers are rented, in both sync and async archive APIs.
-Exceeding the limit throws `NotSupportedException`. This is not an aggregate
-memory limit: pools, model tables, parallel workers, and other formats are not covered.
-
-RAR archive and reader APIs also enforce this limit during extraction, before
-allocating a RAR window or a RAR3 PPMd heap, including async extraction. RAR1 through RAR4
-use a fixed 4 MiB window; RAR5 uses the declared dictionary size (at least 256 KiB
-is allocated). PPMd resets retain the largest backing allocation but use the
-requested logical model size. Exceeding the caller limit throws
-`NotSupportedException`. RAR5 dictionaries of 2 GiB or larger are unsupported
-and throw `NotSupportedException` identifying the requested byte size.
-
-RAR3 decoding recognizes only the six standard WinRAR filters (E8, E8E9,
-Itanium, delta, RGB, audio). Custom VM programs and invalid filter parameters
-throw `InvalidFormatException`.
-
-Malformed 7z PPMd properties throw `InvalidFormatException`. SDK-valid PPMd
-memory sizes that exceed the managed allocator's capacity throw `NotSupportedException`.
-The option does not expand the decoder's supported allocation range.
+`SharpCompress.Common.DictionarySizeLimits` contains process-wide static size limits
+in bytes. Set them once at application startup, not around individual requests:
 
 ```csharp
-var options = new ReaderOptions
-{
-    LeaveStreamOpen = true,
-    MaxDecoderMemory = 64L * 1024 * 1024,
-};
-using var archive = ArchiveFactory.OpenArchive(stream, options);
+// Opt in only when trusted archives require larger dictionaries.
+DictionarySizeLimits.Rar5 = 256L << 20;
 ```
+
+| Static property | Default maximum |
+| --- | --- |
+| `Rar4` | 4 MiB (the RAR4 format maximum) |
+| `Rar5` | 64 MiB |
+| `Lzma` (raw LZMA, LZip, ZIP, 7z) | 64 MiB |
+| `Lzma2` (XZ, 7z) | 64 MiB |
+| `Ppmd` (ZIP, 7z, RAR models) | 64 MiB |
+| `ZStandard` (streaming windows) | 128 MiB |
+
+Limits are read directly by the shared codecs before dictionary/model allocation,
+so Archive, Reader, direct decoder, sync, and async paths use the same settings.
+No reader options or decoder overloads are needed. Settings require positive values;
+invalid assignments throw `ArgumentOutOfRangeException` without changing the setting.
+Oversized dictionaries throw `InvalidFormatException`; Zstandard reports
+`ZstdException` with `ZSTD_error_frameParameter_windowTooLarge`. Zstandard's minimum
+configurable window limit is 1 KiB, and its maximum is 1 GiB in a 32-bit process
+or 2 GiB in a 64-bit process. Values outside that inclusive range are rejected
+at assignment. Format and engine restrictions still apply.
+
+These are dictionary/window or model limits, not total-memory, output-size, or
+concurrency limits. Pool rounding and allocator overhead can increase actual memory.
+Shared PPMd allocators also apply the model limit during compression. Fixed/bounded
+codecs retain their format-defined bounds. Custom providers must enforce their own
+limits. Zstandard's one-shot `Unwrap` APIs retain their existing output-size bounds.
+
+The fork's former per-reader decoder memory option has been removed in favor of
+these shared codec limits. Configure the relevant static properties at startup;
+7z dictionary limits now apply when the codec opens, including encoded headers,
+rather than preflighting every dictionary while listing metadata.
+
+LZMA/LZMA2 compression does not apply decoder limits. The 7z writer accepts custom
+`LzmaProperties` dictionaries larger than 64 MiB in serial, solid, and parallel
+mode; reading that output requires an appropriate process-wide limit. The default
+writer dictionary is 1 MiB and `CompressionLevel` does not select a larger one.
+
+RAR5 dictionaries of 2 GiB or larger remain unsupported by this decoder, regardless
+of the configured limit. RAR3 custom VM programs and invalid standard-filter
+parameters throw `InvalidFormatException`. Malformed 7z PPMd properties also throw
+`InvalidFormatException`; sizes beyond the managed allocator's capacity remain
+unsupported even if the configured model limit is raised.
 
 ### ReaderOptions
 

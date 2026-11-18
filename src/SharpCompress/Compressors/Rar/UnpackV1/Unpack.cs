@@ -18,14 +18,11 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
     private readonly BitInput Inp;
     private bool disposed;
 
-    private readonly long? maxDecoderMemory;
     private bool firstWindowDone;
 
-    public Unpack(long? maxDecoderMemory = null)
+    public Unpack()
     {
         Inp = this;
-        this.maxDecoderMemory = maxDecoderMemory;
-        ppm.MaxDecoderMemory = maxDecoderMemory;
     }
 
     private void ValidateDistance(int distance)
@@ -152,10 +149,7 @@ internal sealed partial class Unpack : BitInput, IRarUnpack
 
     private void Init()
     {
-        if (maxDecoderMemory is long maximum && PackDef.MAXWINSIZE > maximum)
-        {
-            throw new NotSupportedException("RAR window exceeds ReaderOptions.MaxDecoderMemory.");
-        }
+        DictionarySizeLimits.Validate(PackDef.MAXWINSIZE, DictionarySizeLimits.Rar4, "RAR4");
         if (this.window is null)
         {
             this.window = ArrayPool<byte>.Shared.Rent(PackDef.MAXWINSIZE);

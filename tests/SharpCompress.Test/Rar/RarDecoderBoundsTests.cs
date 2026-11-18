@@ -28,6 +28,7 @@ using Unpack5 = SharpCompress.Compressors.Rar.UnpackV2017.Unpack;
 
 namespace SharpCompress.Test.Rar;
 
+[Collection(SharpCompress.Test.Streams.DictionarySizeLimitCollection.Name)]
 public class RarDecoderBoundsTests : TestBase
 {
     [Theory]
@@ -246,6 +247,7 @@ public class RarDecoderBoundsTests : TestBase
     public async Task Rar5_Filter_Output_Is_Clamped(bool useAsync)
     {
         using var unpack = new Unpack5();
+        Set(unpack, "fileHeader", Header(50, 0));
         Call(unpack, "Init", 0x40000L, false);
         Set(unpack, "UnpPtr", (uint)64);
         Set(unpack, "DestUnpSize", 3L);
@@ -406,21 +408,30 @@ public class RarDecoderBoundsTests : TestBase
     [InlineData(true)]
     public async Task Rar_Ppmd_Heap_Enforces_Memory_Cap(bool useAsync)
     {
-        using var unpack = new Unpack3();
-        using var input = new MemoryStream(new byte[] { 0x21, 1, 0, 0, 0, 0 });
-        Set(unpack, "readStream", input);
-        using var model = new ModelPpm { MaxDecoderMemory = 1 << 20 };
-        if (useAsync)
+        var previousPpmd = DictionarySizeLimits.Ppmd;
+        try
         {
-            await Assert.ThrowsAsync<NotSupportedException>(async () =>
-                await model.DecodeInitAsync(unpack, 0, CancellationToken.None)
-            );
+            DictionarySizeLimits.Ppmd = 1 << 20;
+            using var unpack = new Unpack3();
+            using var input = new MemoryStream(new byte[] { 0x21, 1, 0, 0, 0, 0 });
+            Set(unpack, "readStream", input);
+            using var model = new ModelPpm();
+            if (useAsync)
+            {
+                await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+                    await model.DecodeInitAsync(unpack, 0, CancellationToken.None)
+                );
+            }
+            else
+            {
+                Assert.Throws<InvalidFormatException>(() => model.DecodeInit(unpack, 0));
+            }
+            Assert.Equal(0, model.SubAlloc.GetAllocatedMemory());
         }
-        else
+        finally
         {
-            Assert.Throws<NotSupportedException>(() => model.DecodeInit(unpack, 0));
+            DictionarySizeLimits.Ppmd = previousPpmd;
         }
-        Assert.Equal(0, model.SubAlloc.GetAllocatedMemory());
     }
 
     [Theory]
@@ -430,27 +441,39 @@ public class RarDecoderBoundsTests : TestBase
     [InlineData("Rar5.rar", true)]
     public async Task Rar_Archive_And_Reader_Enforce_Memory_Cap(string name, bool useAsync)
     {
-        var options = new ReaderOptions { LeaveStreamOpen = true, MaxDecoderMemory = 1 };
-        using var source = File.OpenRead(Path.Combine(TEST_ARCHIVES_PATH, name));
-        if (useAsync)
+        var previousRar4 = DictionarySizeLimits.Rar4;
+        var previousRar5 = DictionarySizeLimits.Rar5;
+        try
         {
-            await using var archive = await RarArchive.OpenAsyncArchive(
-                source,
-                options,
-                CancellationToken.None
-            );
-            var entry = await archive.EntriesAsync.Where(e => !e.IsDirectory).FirstAsync();
-            await Assert.ThrowsAsync<NotSupportedException>(async () =>
-                await entry.WriteToAsync(Stream.Null, cancellationToken: CancellationToken.None)
-            );
+            DictionarySizeLimits.Rar4 = 1;
+            DictionarySizeLimits.Rar5 = 1;
+            var options = new ReaderOptions { LeaveStreamOpen = true };
+            using var source = File.OpenRead(Path.Combine(TEST_ARCHIVES_PATH, name));
+            if (useAsync)
+            {
+                await using var archive = await RarArchive.OpenAsyncArchive(
+                    source,
+                    options,
+                    CancellationToken.None
+                );
+                var entry = await archive.EntriesAsync.Where(e => !e.IsDirectory).FirstAsync();
+                await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+                    await entry.WriteToAsync(Stream.Null, cancellationToken: CancellationToken.None)
+                );
+            }
+            else
+            {
+                using var reader = RarReader.OpenReader(source, options);
+                while (reader.MoveToNextEntry() && reader.Entry.IsDirectory) { }
+                Assert.Throws<InvalidFormatException>(() => reader.WriteEntryTo(Stream.Null));
+            }
+            Assert.True(source.CanRead);
         }
-        else
+        finally
         {
-            using var reader = RarReader.OpenReader(source, options);
-            while (reader.MoveToNextEntry() && reader.Entry.IsDirectory) { }
-            Assert.Throws<NotSupportedException>(() => reader.WriteEntryTo(Stream.Null));
+            DictionarySizeLimits.Rar4 = previousRar4;
+            DictionarySizeLimits.Rar5 = previousRar5;
         }
-        Assert.True(source.CanRead);
     }
 
     [Fact]
@@ -471,6 +494,7 @@ public class RarDecoderBoundsTests : TestBase
     public void Rar5_Maximum_Increased_Match_Wraps_At_Window_End()
     {
         using var unpack = new Unpack5();
+        Set(unpack, "fileHeader", Header(50, 0));
         Call(unpack, "Init", 0x40000L, false);
         var window = Get<byte[]>(unpack, "Window");
         window[0x40000 - 0x1003] = 0xA5;
@@ -489,6 +513,7 @@ public class RarDecoderBoundsTests : TestBase
         Get<byte[]>(oldUnpack, "window").AsSpan().Fill(0xA5);
         Assert.Throws<InvalidFormatException>(() => Call(oldUnpack, "CopyString", 3, 1));
         using var newUnpack = new Unpack5();
+        Set(newUnpack, "fileHeader", Header(50, 0));
         Call(newUnpack, "Init", 0x40000L, false);
         Get<byte[]>(newUnpack, "Window").AsSpan().Fill(0xA5);
         Assert.Throws<InvalidFormatException>(() =>
@@ -626,6 +651,9 @@ public class RarDecoderBoundsTests : TestBase
     private static FileHeader Header(byte version, long size, bool stored = false)
     {
         var header = new FileHeader();
+        typeof(RarHeader)
+            .GetField("_isRar5", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(header, version >= 50);
         Property(header, "CompressionAlgorithm", version);
         Property(header, "CompressionMethod", (byte)(stored ? 0 : 3));
         Property(header, "UncompressedSize", size);

@@ -14,14 +14,12 @@ namespace SharpCompress.Compressors.Rar.UnpackV2017;
 internal sealed partial class Unpack : BitInput
 {
     private bool disposed;
-    private readonly long? maxDecoderMemory;
     private bool firstWindowDone;
 
-    public Unpack(long? maxDecoderMemory = null)
+    public Unpack()
         //:Inp(true),VMCodeInp(true)
         : base(true)
     {
-        this.maxDecoderMemory = maxDecoderMemory;
         _UnpackCtor();
 
         //UnpIO=DataIO;
@@ -92,10 +90,6 @@ internal sealed partial class Unpack : BitInput
 
     private void Init(long requestedSize, bool Solid)
     {
-        if (maxDecoderMemory is long maximum && Math.Max(requestedSize, 0x40000) > maximum)
-        {
-            throw new NotSupportedException("RAR window exceeds ReaderOptions.MaxDecoderMemory.");
-        }
         if (requestedSize > int.MaxValue)
         {
             throw new NotSupportedException($"RAR dictionary too large: {requestedSize} bytes.");
@@ -122,14 +116,22 @@ internal sealed partial class Unpack : BitInput
             WinSize = MinAllocSize;
         }
 
+        // Validate before renting or reusing a solid window. The RAR5 header can
+        // request a huge dictionary even when there are no compressed bytes.
+        DictionarySizeLimits.Validate(
+            WinSize,
+            fileHeader.IsRar5 ? DictionarySizeLimits.Rar5 : DictionarySizeLimits.Rar4,
+            fileHeader.IsRar5 ? "RAR5" : "RAR4"
+        );
+
         if (WinSize <= MaxWinSize) // Use the already allocated window.
         {
             return;
         }
 
-        if ((WinSize >> 16) > 0x10000) // Window size must not exceed 4 GB.
+        if (WinSize > int.MaxValue)
         {
-            return;
+            throw new InvalidFormatException("RAR window exceeds the supported array size.");
         }
 
         // Archiving code guarantees that window size does not grow in the same

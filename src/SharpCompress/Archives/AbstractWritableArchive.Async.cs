@@ -21,12 +21,15 @@ public abstract partial class AbstractWritableArchive<TEntry, TVolume, TOptions>
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
+        cancellationToken.ThrowIfCancellationRequested();
         await foreach (
             var entry in OldEntriesAsync.WithCancellation(cancellationToken).ConfigureAwait(false)
         )
         {
+            cancellationToken.ThrowIfCancellationRequested();
             yield return entry;
         }
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var entry in newEntries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -37,9 +40,50 @@ public abstract partial class AbstractWritableArchive<TEntry, TVolume, TOptions>
         }
     }
 
-    // Async property moved from main file
     private IAsyncEnumerable<TEntry> OldEntriesAsync =>
-        base.EntriesAsync.Where(x => !removedEntries.Contains(x));
+        LoadOriginalEntriesAsync().Where(x => !removedEntries.Contains(x));
+
+    private async IAsyncEnumerable<TEntry> LoadOriginalEntriesAsync(
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
+    )
+    {
+        var index = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            while (index < originalEntries.Count)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return originalEntries[index++];
+            }
+            if (originalEntriesLoaded)
+            {
+                yield break;
+            }
+
+            // The cached loader outlives individual enumerations and must not
+            // retain a caller's cancellation token after that enumeration ends.
+            originalEntriesAsyncSource ??= base.EntriesAsync.GetAsyncEnumerator(
+                CancellationToken.None
+            );
+            while (await originalEntriesAsyncSource.MoveNextAsync().ConfigureAwait(false))
+            {
+                if (originalEntriesAsyncRead++ < originalEntries.Count)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    continue;
+                }
+                originalEntries.Add(originalEntriesAsyncSource.Current);
+                break;
+            }
+            if (index == originalEntries.Count)
+            {
+                await originalEntriesAsyncSource.DisposeAsync().ConfigureAwait(false);
+                originalEntriesAsyncSource = null;
+                originalEntriesLoaded = true;
+            }
+        }
+    }
 
     private async ValueTask RebuildModifiedCollectionAsync()
     {
@@ -155,6 +199,12 @@ public abstract partial class AbstractWritableArchive<TEntry, TVolume, TOptions>
     public override async ValueTask DisposeAsync()
     {
         await base.DisposeAsync().ConfigureAwait(false);
+        originalEntriesSource?.Dispose();
+        if (originalEntriesAsyncSource is not null)
+        {
+            await originalEntriesAsyncSource.DisposeAsync().ConfigureAwait(false);
+        }
+        originalEntries.Cast<Entry>().ForEach(x => x.Close());
         newEntries.Cast<Entry>().ForEach(x => x.Close());
         removedEntries.Cast<Entry>().ForEach(x => x.Close());
         modifiedEntries.Cast<Entry>().ForEach(x => x.Close());

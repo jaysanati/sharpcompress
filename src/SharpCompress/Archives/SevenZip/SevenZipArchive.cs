@@ -90,7 +90,7 @@ public partial class SevenZipArchive : AbstractArchive<SevenZipArchiveEntry, Sev
         if (_database is null)
         {
             stream.Position = 0;
-            var reader = new ArchiveReader(maxDecoderMemory: ReaderOptions.MaxDecoderMemory);
+            var reader = new ArchiveReader();
             reader.Open(stream, lookForHeader: ReaderOptions.LookForHeader);
             _database = reader.ReadDatabase(new PasswordProvider(ReaderOptions.Password));
         }

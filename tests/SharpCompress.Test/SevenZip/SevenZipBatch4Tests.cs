@@ -15,6 +15,7 @@ using Xunit;
 
 namespace SharpCompress.Test.SevenZip;
 
+[Collection(SharpCompress.Test.Streams.DictionarySizeLimitCollection.Name)]
 public class SevenZipBatch4Tests : TestBase
 {
     [Theory]
@@ -76,17 +77,20 @@ public class SevenZipBatch4Tests : TestBase
             kind == 4 ? new byte[] { 1, 0 } : Array.Empty<byte>()
         );
         var reader = new ArchiveReader();
+        var exceptionType =
+            kind == 3 ? typeof(InvalidFormatException) : typeof(IncompleteArchiveException);
         if (asynchronous)
         {
             await reader.OpenAsync(input, false, CancellationToken.None);
-            await Assert.ThrowsAsync<InvalidFormatException>(async () =>
-                await reader.ReadDatabaseAsync(new NoPassword(), CancellationToken.None)
+            await Assert.ThrowsAsync(
+                exceptionType,
+                async () => await reader.ReadDatabaseAsync(new NoPassword(), CancellationToken.None)
             );
         }
         else
         {
             reader.Open(input, false);
-            Assert.Throws<InvalidFormatException>(() => reader.ReadDatabase(new NoPassword()));
+            Assert.Throws(exceptionType, () => reader.ReadDatabase(new NoPassword()));
         }
         Assert.True(input.CanRead);
     }
@@ -138,35 +142,18 @@ public class SevenZipBatch4Tests : TestBase
         Assert.Throws<NotSupportedException>(() =>
             new PpmdProperties(new byte[] { 6, 0, 0, 0, 128 })
         );
-        Assert.Throws<NotSupportedException>(() =>
-            new SharpCompress.Compressors.PPMd.H.SubAllocator().StartSubAllocator(int.MaxValue)
-        );
-    }
-
-    [Theory]
-    [InlineData("7Zip.PPMd.7z", false)]
-    [InlineData("7Zip.PPMd.7z", true)]
-    [InlineData("7Zip.LZMA.7z", false)]
-    [InlineData("7Zip.LZMA.7z", true)]
-    public async Task DecoderMemoryLimitBeforeExtraction(string filename, bool asynchronous)
-    {
-        using var input = File.OpenRead(Path.Combine(TEST_ARCHIVES_PATH, filename));
-        var options = new ReaderOptions { LeaveStreamOpen = true, MaxDecoderMemory = 1 };
-        using var archive = asynchronous
-            ? (SevenZipArchive)
-                await SevenZipArchive.OpenAsyncArchive(input, options, CancellationToken.None)
-            : (SevenZipArchive)SevenZipArchive.OpenArchive(input, options);
-        if (asynchronous)
+        var previous = DictionarySizeLimits.Ppmd;
+        try
         {
-            await Assert.ThrowsAsync<NotSupportedException>(async () =>
-                await archive.EntriesAsync.ToListAsync()
+            DictionarySizeLimits.Ppmd = int.MaxValue;
+            Assert.Throws<NotSupportedException>(() =>
+                new SharpCompress.Compressors.PPMd.H.SubAllocator().StartSubAllocator(int.MaxValue)
             );
         }
-        else
+        finally
         {
-            Assert.Throws<NotSupportedException>(() => archive.Entries.ToList());
+            DictionarySizeLimits.Ppmd = previous;
         }
-        Assert.True(input.CanRead);
     }
 
     [Theory]

@@ -35,9 +35,7 @@ internal sealed partial class TarHeader
     {
         var buffer = new byte[BLOCK_SIZE];
 
-        WriteOctalBytes(511, buffer, 100, 8);
-        WriteOctalBytes(0, buffer, 108, 8);
-        WriteOctalBytes(0, buffer, 116, 8);
+        WriteMetadata(buffer);
 
         var nameByteCount = ArchiveEncoding
             .GetEncoding()
@@ -133,9 +131,7 @@ internal sealed partial class TarHeader
     {
         var buffer = new byte[BLOCK_SIZE];
 
-        WriteOctalBytes(511, buffer, 100, 8);
-        WriteOctalBytes(0, buffer, 108, 8);
-        WriteOctalBytes(0, buffer, 116, 8);
+        WriteMetadata(buffer);
 
         var nameByteCount = ArchiveEncoding
             .GetEncoding()
@@ -288,13 +284,15 @@ internal sealed partial class TarHeader
                 LinkName = ArchiveEncoding.Decode(buffer, 157, 100).TrimNulls();
             }
 
-            Mode = ReadNumberOrZero(buffer, 100, 8);
-            UserId = ReadNumberOrZero(buffer, 108, 8);
-            GroupId = ReadNumberOrZero(buffer, 116, 8);
+            Metadata = new TarEntryMetadata
+            {
+                Mode = ReadNumberOrZero(buffer, 100, 8),
+                UserId = ReadOwnerId(buffer, 108),
+                GroupId = ReadOwnerId(buffer, 116),
+            };
 
             DeviceMajor = ReadNumber(buffer, 329, 8);
             DeviceMinor = ReadNumber(buffer, 337, 8);
-
             LastModifiedTime = ReadModificationTime(buffer);
             Magic = ArchiveEncoding.Decode(buffer, 257, 6).TrimNulls();
 
@@ -316,12 +314,7 @@ internal sealed partial class TarHeader
 
         pendingMetadata.ApplyTo(this);
 
-        if (entryType == EntryType.Directory)
-        {
-            Mode |= 0b1_000_000_000;
-        }
-
-        if (Name.Length == 0)
+        if (entryType != EntryType.LongName && Name.Length == 0)
         {
             throw new InvalidFormatException("TAR header has an empty name.");
         }

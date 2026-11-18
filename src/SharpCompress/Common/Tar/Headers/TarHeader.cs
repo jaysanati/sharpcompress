@@ -27,9 +27,7 @@ internal sealed partial class TarHeader
     internal string? Name { get; set; }
     internal string? LinkName { get; set; }
 
-    internal long Mode { get; set; }
-    internal long UserId { get; set; }
-    internal long GroupId { get; set; }
+    internal TarEntryMetadata? Metadata { get; set; }
     internal long Size { get; set; }
     internal long DeviceMajor { get; set; }
     internal long DeviceMinor { get; set; }
@@ -39,11 +37,16 @@ internal sealed partial class TarHeader
     internal IArchiveEncoding ArchiveEncoding { get; }
 
     internal const int BLOCK_SIZE = 512;
+    internal const long MAX_ENTRY_SIZE = long.MaxValue - (BLOCK_SIZE - 1);
 
     // Maximum size for long name/link headers to prevent memory exhaustion attacks
     // This is generous enough for most real-world scenarios (32KB)
     private const int MAX_LONG_NAME_SIZE = 32768;
     private const int MAX_PAX_HEADER_SIZE = 65536;
+    private const long MAX_USTAR_OWNER_ID = 2_097_151;
+    private const long MIN_GNU_OWNER_ID = -4_611_686_018_427_387_904;
+    private const long MAX_GNU_OWNER_ID = 4_611_686_018_427_387_903;
+    private const byte BASE256_MARKER = 128;
 
     internal sealed class PaxMetadata
     {
@@ -89,19 +92,14 @@ internal sealed partial class TarHeader
                 header.LastModifiedTime = LastModifiedTime.Value;
             }
 
-            if (Mode.HasValue)
+            if (Mode.HasValue || UserId.HasValue || GroupId.HasValue)
             {
-                header.Mode = Mode.Value;
-            }
-
-            if (UserId.HasValue)
-            {
-                header.UserId = UserId.Value;
-            }
-
-            if (GroupId.HasValue)
-            {
-                header.GroupId = GroupId.Value;
+                header.Metadata = new TarEntryMetadata
+                {
+                    Mode = Mode ?? header.Metadata?.Mode,
+                    UserId = UserId ?? header.Metadata?.UserId,
+                    GroupId = GroupId ?? header.Metadata?.GroupId,
+                };
             }
         }
     }
@@ -125,9 +123,7 @@ internal sealed partial class TarHeader
     {
         var buffer = new byte[BLOCK_SIZE];
 
-        WriteOctalBytes(511, buffer, 100, 8); // file mode
-        WriteOctalBytes(0, buffer, 108, 8); // owner ID
-        WriteOctalBytes(0, buffer, 116, 8); // group ID
+        WriteMetadata(buffer);
 
         //ArchiveEncoding.UTF8.GetBytes("magic").CopyTo(buffer, 257);
         var nameByteCount = ArchiveEncoding
@@ -229,9 +225,7 @@ internal sealed partial class TarHeader
     {
         var buffer = new byte[BLOCK_SIZE];
 
-        WriteOctalBytes(511, buffer, 100, 8); // file mode
-        WriteOctalBytes(0, buffer, 108, 8); // owner ID
-        WriteOctalBytes(0, buffer, 116, 8); // group ID
+        WriteMetadata(buffer);
 
         //ArchiveEncoding.UTF8.GetBytes("magic").CopyTo(buffer, 257);
         var nameByteCount = ArchiveEncoding
@@ -366,13 +360,15 @@ internal sealed partial class TarHeader
             LinkName = ArchiveEncoding.Decode(buffer, 157, 100).TrimNulls();
         }
 
-        Mode = ReadNumberOrZero(buffer, 100, 8);
-        UserId = ReadNumberOrZero(buffer, 108, 8);
-        GroupId = ReadNumberOrZero(buffer, 116, 8);
+        Metadata = new TarEntryMetadata
+        {
+            Mode = ReadNumberOrZero(buffer, 100, 8),
+            UserId = ReadOwnerId(buffer, 108),
+            GroupId = ReadOwnerId(buffer, 116),
+        };
 
         DeviceMajor = ReadNumber(buffer, 329, 8);
         DeviceMinor = ReadNumber(buffer, 337, 8);
-
         LastModifiedTime = ReadModificationTime(buffer);
         Magic = ArchiveEncoding.Decode(buffer, 257, 6).TrimNulls();
 
@@ -389,12 +385,7 @@ internal sealed partial class TarHeader
 
         pendingMetadata.ApplyTo(this);
 
-        if (entryType == EntryType.Directory)
-        {
-            Mode |= 0b1_000_000_000;
-        }
-
-        if (Name.Length == 0)
+        if (entryType != EntryType.LongName && Name.Length == 0)
         {
             throw new InvalidFormatException("TAR header has an empty name.");
         }
@@ -681,7 +672,7 @@ internal sealed partial class TarHeader
 
     private static long ReadSize(byte[] buffer)
     {
-        if (!TryReadNumber(buffer, 124, 12, out var size) || size < 0)
+        if (!TryReadNumber(buffer, 124, 12, out var size) || size is < 0 or > MAX_ENTRY_SIZE)
         {
             throw new InvalidFormatException("Invalid TAR size field.");
         }
@@ -820,6 +811,45 @@ internal sealed partial class TarHeader
         }
         return Convert.ToInt64(s, 8);
     }
+
+    private void WriteMetadata(byte[] buffer)
+    {
+        // Apply defaults only when serializing. Explicit zero values must not be
+        // confused with metadata that was never supplied.
+        var metadata = Metadata.GetValueOrDefault();
+        WriteOctalBytes(metadata.GetModeForWriting(), buffer, 100, 8);
+        WriteOwnerId(metadata.UserId ?? 0, buffer, 108);
+        WriteOwnerId(metadata.GroupId ?? 0, buffer, 116);
+    }
+
+    private void WriteOwnerId(long value, byte[] buffer, int offset)
+    {
+        if (value is >= 0 and <= MAX_USTAR_OWNER_ID)
+        {
+            WriteOctalBytes(value, buffer, offset, 8);
+            return;
+        }
+
+        if (WriteFormat == TarHeaderWriteFormat.USTAR)
+        {
+            throw new InvalidFormatException(
+                $"TAR owner/group ID {value} does not fit USTAR's seven octal digits. Try using GNU Tar format instead."
+            );
+        }
+
+        // The marker consumes one bit; the remaining 63 bits hold a signed value.
+        if (value is < MIN_GNU_OWNER_ID or > MAX_GNU_OWNER_ID)
+        {
+            throw new InvalidFormatException(
+                $"TAR owner/group ID {value} does not fit GNU base-256."
+            );
+        }
+        BinaryPrimitives.WriteInt64BigEndian(buffer.AsSpan(offset, 8), value);
+        buffer[offset] |= BASE256_MARKER;
+    }
+
+    private static long ReadOwnerId(byte[] buffer, int offset) =>
+        ReadNumberOrZero(buffer, offset, 8);
 
     private static long ReadAsciiInt64(byte[] buffer, int offset, int count)
     {

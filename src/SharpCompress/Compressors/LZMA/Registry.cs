@@ -1,5 +1,4 @@
 using System;
-using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using SharpCompress.Common;
@@ -33,11 +32,7 @@ internal static partial class DecoderRegistry
     private const uint K_B_ZIP2 = 0x040202;
     private const uint K_ZSTD = 0x4F71101;
 
-    internal static void ValidateProperties(
-        CMethodId id,
-        byte[]? info,
-        long? maxDecoderMemory = null
-    )
+    internal static void ValidateProperties(CMethodId id, byte[]? info)
     {
         var length = id._id switch
         {
@@ -50,24 +45,10 @@ internal static partial class DecoderRegistry
         {
             throw new InvalidFormatException("Invalid 7z coder property length.");
         }
-        long memory = 0;
         if (id._id == K_PPMD)
         {
-            memory = new PpmdProperties(info!).AllocatorSize;
-        }
-        else if (id._id == K_LZMA)
-        {
-            memory = BinaryPrimitives.ReadUInt32LittleEndian(info!.AsSpan(1));
-        }
-        else if (id._id == K_LZMA2 && info![0] <= 40)
-        {
-            memory = info[0] == 40 ? uint.MaxValue : (2L | (info[0] & 1)) << ((info[0] >> 1) + 11);
-        }
-        if (maxDecoderMemory is long maximum && memory > maximum)
-        {
-            throw new NotSupportedException(
-                "7z decoder memory exceeds ReaderOptions.MaxDecoderMemory."
-            );
+            // Validate the format and managed allocator capacity independently of limits.
+            _ = new PpmdProperties(info!);
         }
     }
 
