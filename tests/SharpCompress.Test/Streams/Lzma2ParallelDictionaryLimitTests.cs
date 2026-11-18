@@ -41,7 +41,7 @@ public class Lzma2ParallelDictionaryLimitTests : TestBase
             ReaderOptions.ForFilePath.WithEnableParallelism(parallel)
         );
         var entry = Assert.Single(archive.Entries);
-        Assert.Throws<InvalidFormatException>(() =>
+        Assert.Throws<DictionarySizeLimitExceededException>(() =>
         {
             using var stream = entry.OpenEntryStream();
             stream.CopyTo(Stream.Null);
@@ -58,7 +58,7 @@ public class Lzma2ParallelDictionaryLimitTests : TestBase
         using var input = File.Create(path);
         using var output = File.Create(path + ".out");
         var blocks = new[] { new Lzma2Block(0, 1, 0, 1), new Lzma2Block(1, 1, 1, 1) };
-        Assert.Throws<InvalidFormatException>(() =>
+        Assert.Throws<DictionarySizeLimitExceededException>(() =>
             Lzma2ParallelDecoder.DecodeBlocksParallel(
                 input.SafeFileHandle,
                 new byte[] { 2 },

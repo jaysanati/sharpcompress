@@ -69,7 +69,7 @@ public class SevenZipWriterDictionaryLimitTests
                 ReaderOptions.ForExternalStream
             );
             var entry = archive.Entries.Single();
-            Assert.Throws<InvalidFormatException>(() =>
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
             {
                 using var decoded = entry.OpenEntryStream();
             });

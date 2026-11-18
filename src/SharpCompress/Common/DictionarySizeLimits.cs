@@ -85,11 +85,15 @@ public static class DictionarySizeLimits
 
     internal static void Validate(long size, long maximum, string format)
     {
-        if (size <= 0 || size > maximum)
+        if (size <= 0)
         {
             throw new InvalidFormatException(
                 $"{format} dictionary size {size} is invalid or exceeds the maximum of {maximum} bytes."
             );
+        }
+        if (size > maximum)
+        {
+            throw new DictionarySizeLimitExceededException(format, size, maximum);
         }
     }
 }

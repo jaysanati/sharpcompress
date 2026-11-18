@@ -76,16 +76,19 @@ public class DictionarySizeLimitTests : TestBase
         foreach (var properties in new[] { new byte[] { 0x5d, 0, 0, 0, 0x10 }, new byte[] { 30 } })
         {
             using var input = new MemoryStream();
-            if (useAsync)
-            {
-                await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            var exception = useAsync
+                ? await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                     await LzmaStream.CreateAsync(properties, input, -1, -1)
+                )
+                : Assert.Throws<DictionarySizeLimitExceededException>(() =>
+                    LzmaStream.Create(properties, input)
                 );
-            }
-            else
-            {
-                Assert.Throws<InvalidFormatException>(() => LzmaStream.Create(properties, input));
-            }
+            AssertLimit(
+                exception,
+                properties.Length == 5 ? "LZMA" : "LZMA2",
+                properties.Length == 5 ? 256L << 20 : 128L << 20,
+                64L << 20
+            );
             Assert.True(input.CanRead);
             Assert.Equal(0, input.Position);
         }
@@ -100,7 +103,7 @@ public class DictionarySizeLimitTests : TestBase
         decoder.SetDecoderProperties(new byte[] { 0x5d, 0, 0, 0, 0x10 });
         if (useAsync)
         {
-            await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                 await decoder.CodeAsync(
                     Stream.Null,
                     Stream.Null,
@@ -113,7 +116,7 @@ public class DictionarySizeLimitTests : TestBase
         }
         else
         {
-            Assert.Throws<InvalidFormatException>(() =>
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
                 decoder.Code(Stream.Null, Stream.Null, 0, 1, null!)
             );
         }
@@ -145,7 +148,7 @@ public class DictionarySizeLimitTests : TestBase
 
         if (useAsync)
         {
-            await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
             {
                 if (train)
                 {
@@ -166,7 +169,7 @@ public class DictionarySizeLimitTests : TestBase
         }
         else
         {
-            Assert.Throws<InvalidFormatException>(() =>
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
             {
                 if (train)
                 {
@@ -216,7 +219,7 @@ public class DictionarySizeLimitTests : TestBase
         DictionarySizeLimits.Lzma2 = 4095;
         if (useAsync)
         {
-            await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                 await LzmaStream.CreateAsync(new byte[] { 0 }, input, -1, -1)
             );
             DictionarySizeLimits.Lzma2 = 4096;
@@ -227,7 +230,9 @@ public class DictionarySizeLimitTests : TestBase
         }
         else
         {
-            Assert.Throws<InvalidFormatException>(() => LzmaStream.Create(new byte[] { 0 }, input));
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
+                LzmaStream.Create(new byte[] { 0 }, input)
+            );
             DictionarySizeLimits.Lzma2 = 4096;
             using var decoder = LzmaStream.Create(new byte[] { 0 }, input);
             Assert.Equal(65, decoder.ReadByte());
@@ -287,8 +292,22 @@ public class DictionarySizeLimitTests : TestBase
     [Fact]
     public void Ppmd_Properties_Reject_Large_Models_Before_Eager_Allocation()
     {
-        Assert.Throws<InvalidFormatException>(() => new PpmdProperties(new byte[] { 0xf5, 0x0f }));
-        Assert.Throws<InvalidFormatException>(() => new PpmdProperties(256 << 20, 6));
+        AssertLimit(
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
+                new PpmdProperties(new byte[] { 0xf5, 0x0f })
+            ),
+            "PPMd",
+            256L << 20,
+            DictionarySizeLimits.Ppmd
+        );
+        AssertLimit(
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
+                new PpmdProperties(256 << 20, 6)
+            ),
+            "PPMd",
+            256L << 20,
+            DictionarySizeLimits.Ppmd
+        );
     }
 
     [Fact]
@@ -299,7 +318,9 @@ public class DictionarySizeLimitTests : TestBase
         var properties = new PpmdProperties(1 << 20, 6);
         var originalHeader = properties.Properties;
 
-        Assert.Throws<InvalidFormatException>(() => properties.AllocatorSize = 3 << 20);
+        Assert.Throws<DictionarySizeLimitExceededException>(() =>
+            properties.AllocatorSize = 3 << 20
+        );
         Assert.Equal(1 << 20, properties.AllocatorSize);
         Assert.Equal(originalHeader, properties.Properties);
 
@@ -317,13 +338,13 @@ public class DictionarySizeLimitTests : TestBase
         using var input = new MemoryStream();
         if (useAsync)
         {
-            await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                 await PpmdStream.CreateAsync(properties, input, false, CancellationToken.None)
             );
         }
         else
         {
-            Assert.Throws<InvalidFormatException>(() =>
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
                 PpmdStream.Create(properties, input, false)
             );
         }
@@ -336,7 +357,9 @@ public class DictionarySizeLimitTests : TestBase
         using var limits = new DictionarySizeLimitScope();
         DictionarySizeLimits.Ppmd = 1 << 20;
         using var allocator = new SubAllocator();
-        Assert.Throws<InvalidFormatException>(() => allocator.StartSubAllocator(2 << 20));
+        Assert.Throws<DictionarySizeLimitExceededException>(() =>
+            allocator.StartSubAllocator(2 << 20)
+        );
         Assert.Equal(0, allocator.GetAllocatedMemory());
         Assert.True(allocator.StartSubAllocator(1 << 20));
         Assert.Equal(1 << 20, allocator.GetAllocatedMemory());
@@ -352,7 +375,7 @@ public class DictionarySizeLimitTests : TestBase
         using var input = new MemoryStream(bytes);
         if (useAsync)
         {
-            await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                 await LZipStream.CreateAsync(
                     input,
                     CompressionMode.Decompress,
@@ -362,7 +385,7 @@ public class DictionarySizeLimitTests : TestBase
         }
         else
         {
-            Assert.Throws<InvalidFormatException>(() =>
+            Assert.Throws<DictionarySizeLimitExceededException>(() =>
                 LZipStream.Create(input, CompressionMode.Decompress)
             );
         }
@@ -414,6 +437,12 @@ public class DictionarySizeLimitTests : TestBase
                     ZSTD_ErrorCode.ZSTD_error_frameParameter_windowTooLarge,
                     exception.Code
                 );
+                AssertLimit(
+                    Assert.IsType<DictionarySizeLimitExceededException>(exception.InnerException),
+                    "Zstandard",
+                    maximum is null ? 1L << 30 : 16384,
+                    maximum ?? defaultMaximum
+                );
             }
         }
     }
@@ -438,6 +467,62 @@ public class DictionarySizeLimitTests : TestBase
             Assert.Equal(valid, DictionarySizeLimits.ZStandard);
             using var decoder = new Decompressor();
         }
+    }
+
+    internal static void AssertLimit(
+        DictionarySizeLimitExceededException exception,
+        string format,
+        long requestedSize,
+        long maximumSize
+    )
+    {
+        Assert.IsAssignableFrom<InvalidFormatException>(exception);
+        Assert.Equal(format, exception.Format);
+        Assert.Equal(requestedSize, exception.RequestedSize);
+        Assert.Equal(maximumSize, exception.MaximumSize);
+        Assert.Equal(
+            $"{format} dictionary size {requestedSize} is invalid or exceeds the maximum of {maximumSize} bytes.",
+            exception.Message
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Lzma_Zero_Dictionary_Is_Invalid(bool useAsync)
+    {
+        using var input = new MemoryStream();
+        var properties = new byte[] { 0x5d, 0, 0, 0, 0 };
+        if (useAsync)
+        {
+            await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+                await LzmaStream.CreateAsync(properties, input, -1, -1)
+            );
+        }
+        else
+        {
+            Assert.Throws<InvalidFormatException>(() => LzmaStream.Create(properties, input));
+        }
+        Assert.Throws<InvalidFormatException>(() => new PpmdProperties(0, 6));
+    }
+
+    [Theory]
+    [InlineData("Rar.rar", false, false)]
+    [InlineData("Rar.rar", false, true)]
+    [InlineData("Rar.rar", true, false)]
+    [InlineData("Rar.rar", true, true)]
+    [InlineData("Rar4.rar", false, false)]
+    [InlineData("Rar4.rar", false, true)]
+    [InlineData("Rar4.rar", true, false)]
+    [InlineData("Rar4.rar", true, true)]
+    public async Task Rar4_Limit_Reports_Size(string file, bool archiveApi, bool useAsync)
+    {
+        using var limits = new DictionarySizeLimitScope();
+        DictionarySizeLimits.Rar4 = 1024;
+        var exception = await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(() =>
+            Extract(file, archiveApi, useAsync)
+        );
+        AssertLimit(exception, "RAR4", 4L << 20, 1024);
     }
 
     public static IEnumerable<object[]> ArchiveCases()

@@ -442,8 +442,14 @@ Limits are read directly by the shared codecs before dictionary/model allocation
 so Archive, Reader, direct decoder, sync, and async paths use the same settings.
 No reader options or decoder overloads are needed. Settings require positive values;
 invalid assignments throw `ArgumentOutOfRangeException` without changing the setting.
-Oversized dictionaries throw `InvalidFormatException`; Zstandard reports
-`ZstdException` with `ZSTD_error_frameParameter_windowTooLarge`. Zstandard's minimum
+Configured-limit rejections throw `DictionarySizeLimitExceededException`, a sealed
+subclass of `InvalidFormatException`, with read-only `Format` (`string`),
+`RequestedSize` (`long`), and `MaximumSize` (`long`) properties; sizes are in bytes.
+Nonpositive sizes still throw plain `InvalidFormatException`. Zstandard streaming
+preserves `ZstdException` with `ZSTD_error_frameParameter_windowTooLarge` and exposes
+the limit exception through `InnerException`.
+
+Zstandard's minimum
 configurable window limit is 1 KiB, and its maximum is 1 GiB in a 32-bit process
 or 2 GiB in a 64-bit process. Values outside that inclusive range are rejected
 at assignment. Format and engine restrictions still apply.

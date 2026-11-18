@@ -193,9 +193,27 @@ public unsafe class Decompressor : IDisposable
         fixed (ZSTD_outBuffer_s* outputPtr = &output)
         {
             using var dctx = handle.Acquire();
-            return Unsafe
-                .Methods.ZSTD_decompressStream(dctx, outputPtr, inputPtr)
-                .EnsureZstdSuccess();
+            var result = Unsafe.Methods.ZSTD_decompressStream(dctx, outputPtr, inputPtr);
+            ZSTD_DCtx_s* context = dctx;
+            if (
+                result
+                    == unchecked(0 - (nuint)ZSTD_ErrorCode.ZSTD_error_frameParameter_windowTooLarge)
+                && context->fParams.windowSize > context->maxWindowSize
+                && context->fParams.windowSize <= long.MaxValue
+            )
+            {
+                // Preserve the Zstandard error contract while exposing the configured-limit rejection.
+                throw new ZstdException(
+                    ZSTD_ErrorCode.ZSTD_error_frameParameter_windowTooLarge,
+                    Unsafe.Methods.ZSTD_getErrorName(result),
+                    new DictionarySizeLimitExceededException(
+                        "Zstandard",
+                        (long)context->fParams.windowSize,
+                        (long)context->maxWindowSize
+                    )
+                );
+            }
+            return result.EnsureZstdSuccess();
         }
     }
 }

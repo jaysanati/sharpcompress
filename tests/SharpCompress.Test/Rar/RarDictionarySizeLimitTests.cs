@@ -50,7 +50,7 @@ public class RarDictionarySizeLimitTests
         Assert.Equal(72, bytes.Length);
         using var input = new MemoryStream(bytes);
         var options = ReaderOptions.ForExternalStream;
-        InvalidFormatException exception;
+        DictionarySizeLimitExceededException exception;
         if (archiveApi && useAsync)
         {
             await using var archive = await ArchiveFactory.OpenAsyncArchive(
@@ -61,7 +61,7 @@ public class RarDictionarySizeLimitTests
             var entry = await archive.EntriesAsync.FirstAsync();
             Assert.Equal(45056, entry.Size);
             Assert.Equal(0, entry.CompressedSize);
-            exception = await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            exception = await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
             {
                 using var stream = await entry.OpenEntryStreamAsync(CancellationToken.None);
             });
@@ -72,7 +72,7 @@ public class RarDictionarySizeLimitTests
             var entry = archive.Entries.First();
             Assert.Equal(45056, entry.Size);
             Assert.Equal(0, entry.CompressedSize);
-            exception = Assert.Throws<InvalidFormatException>(() =>
+            exception = Assert.Throws<DictionarySizeLimitExceededException>(() =>
             {
                 using var stream = entry.OpenEntryStream();
             });
@@ -86,7 +86,7 @@ public class RarDictionarySizeLimitTests
                 CancellationToken.None
             );
             Assert.True(await reader.MoveToNextEntryAsync(CancellationToken.None));
-            exception = await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+            exception = await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                 await reader.WriteEntryToAsync(Stream.Null, CancellationToken.None)
             );
         }
@@ -95,10 +95,16 @@ public class RarDictionarySizeLimitTests
             using var forwardOnly = new NonSeekableStream(input);
             using var reader = ReaderFactory.OpenReader(forwardOnly, options);
             Assert.True(reader.MoveToNextEntry());
-            exception = Assert.Throws<InvalidFormatException>(() =>
+            exception = Assert.Throws<DictionarySizeLimitExceededException>(() =>
                 reader.WriteEntryTo(Stream.Null)
             );
         }
+        DictionarySizeLimitTests.AssertLimit(
+            exception,
+            "RAR5",
+            hex == Rar256MiB ? 256L << 20 : 1L << 30,
+            DictionarySizeLimits.Rar5
+        );
         Assert.Contains("RAR5 dictionary size", exception.Message);
         Assert.Contains(DictionarySizeLimits.Rar5.ToString(), exception.Message);
     }
@@ -130,10 +136,15 @@ public class RarDictionarySizeLimitTests
                 var entry = await archive.EntriesAsync.FirstAsync();
                 if (maximum < 256L << 10)
                 {
-                    await Assert.ThrowsAsync<InvalidFormatException>(async () =>
-                    {
-                        using var stream = await entry.OpenEntryStreamAsync(CancellationToken.None);
-                    });
+                    var exception = await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(
+                        async () =>
+                        {
+                            using var stream = await entry.OpenEntryStreamAsync(
+                                CancellationToken.None
+                            );
+                        }
+                    );
+                    DictionarySizeLimitTests.AssertLimit(exception, "RAR5", 256L << 10, maximum);
                 }
                 else
                 {
@@ -146,10 +157,11 @@ public class RarDictionarySizeLimitTests
                 var entry = archive.Entries.First();
                 if (maximum < 256L << 10)
                 {
-                    Assert.Throws<InvalidFormatException>(() =>
+                    var exception = Assert.Throws<DictionarySizeLimitExceededException>(() =>
                     {
                         using var stream = entry.OpenEntryStream();
                     });
+                    DictionarySizeLimitTests.AssertLimit(exception, "RAR5", 256L << 10, maximum);
                 }
                 else
                 {

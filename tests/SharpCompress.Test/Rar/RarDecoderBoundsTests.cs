@@ -418,13 +418,13 @@ public class RarDecoderBoundsTests : TestBase
             using var model = new ModelPpm();
             if (useAsync)
             {
-                await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+                await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                     await model.DecodeInitAsync(unpack, 0, CancellationToken.None)
                 );
             }
             else
             {
-                Assert.Throws<InvalidFormatException>(() => model.DecodeInit(unpack, 0));
+                Assert.Throws<DictionarySizeLimitExceededException>(() => model.DecodeInit(unpack, 0));
             }
             Assert.Equal(0, model.SubAlloc.GetAllocatedMemory());
         }
@@ -457,7 +457,7 @@ public class RarDecoderBoundsTests : TestBase
                     CancellationToken.None
                 );
                 var entry = await archive.EntriesAsync.Where(e => !e.IsDirectory).FirstAsync();
-                await Assert.ThrowsAsync<InvalidFormatException>(async () =>
+                await Assert.ThrowsAsync<DictionarySizeLimitExceededException>(async () =>
                     await entry.WriteToAsync(Stream.Null, cancellationToken: CancellationToken.None)
                 );
             }
@@ -465,7 +465,7 @@ public class RarDecoderBoundsTests : TestBase
             {
                 using var reader = RarReader.OpenReader(source, options);
                 while (reader.MoveToNextEntry() && reader.Entry.IsDirectory) { }
-                Assert.Throws<InvalidFormatException>(() => reader.WriteEntryTo(Stream.Null));
+                Assert.Throws<DictionarySizeLimitExceededException>(() => reader.WriteEntryTo(Stream.Null));
             }
             Assert.True(source.CanRead);
         }
