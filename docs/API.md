@@ -449,6 +449,15 @@ Nonpositive sizes still throw plain `InvalidFormatException`. Zstandard streamin
 preserves `ZstdException` with `ZSTD_error_frameParameter_windowTooLarge` and exposes
 the limit exception through `InnerException`.
 
+For LZMA and LZMA2 with a known unpacked size, the decoder limit and
+`RequestedSize` apply to `max(4096, min(declaredDictionary, unpackedSize))`.
+This permits even UInt32-sized dictionary declarations for small outputs without
+allocating those declared sizes. Unknown-size streams retain the Int32 window
+restriction. 7z uses each coder's own unpacked size (including solid-folder
+restarts); parallel LZMA2 workers use their individual block sizes. XZ uses its
+optional block-header uncompressed size; ZIP and seekable LZip use sizes already
+available to their decoding paths. No extra reads are performed to discover sizes.
+
 Zstandard's minimum
 configurable window limit is 1 KiB, and its maximum is 1 GiB in a 32-bit process
 or 2 GiB in a 64-bit process. Values outside that inclusive range are rejected

@@ -108,6 +108,12 @@ public class LzmaDictionaryAllocationTests
     [Theory]
     [InlineData(38)]
     [InlineData(40)]
+    public void Lzma2_Large_Properties_Without_Known_Size_Are_Not_Supported(int property) =>
+        Assert.Throws<NotSupportedException>(() =>
+            LzmaStream.Create(new byte[] { (byte)property }, Stream.Null)
+        );
+
+    [Theory]
     [InlineData(64)]
     [InlineData(255)]
     public void Lzma2_Rejects_Unsupported_Dictionary_Properties(int property)

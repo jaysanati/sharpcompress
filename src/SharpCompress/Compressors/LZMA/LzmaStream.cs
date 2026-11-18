@@ -84,7 +84,13 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         _leaveOpen = leaveOpen;
         if (!isLzma2)
         {
-            _dictionarySize = BinaryPrimitives.ReadInt32LittleEndian(properties.AsSpan(1));
+            var declaredSize = BinaryPrimitives.ReadUInt32LittleEndian(properties.AsSpan(1));
+            // Preserve the unknown-size format rejection before applying configured limits.
+            if (outputSize < 0 && (declaredSize == 0 || declaredSize > int.MaxValue))
+            {
+                throw new InvalidFormatException("Invalid LZMA dictionary size.");
+            }
+            _dictionarySize = GetEffectiveDictionarySize(declaredSize, outputSize);
             DictionarySizeLimits.Validate(_dictionarySize, DictionarySizeLimits.Lzma, "LZMA");
             _decoder = new Decoder();
             _decoder.SetDecoderProperties(properties);
@@ -97,7 +103,7 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         }
         else
         {
-            _dictionarySize = GetLzma2DictionarySize(properties[0]);
+            _dictionarySize = GetLzma2DictionarySize(properties[0], outputSize);
 
             Properties = new byte[1];
             _availableBytes = 0;
@@ -105,14 +111,37 @@ public partial class LzmaStream : Stream, IStreamStack, IAsyncDisposable
         }
     }
 
-    internal static int GetLzma2DictionarySize(byte property)
+    internal static int GetEffectiveDictionarySize(long declaredSize, long outputSize)
     {
-        // Larger standard dictionaries exceed this decoder's positive Int32 window range.
-        if (property > 37)
+        // No match can reach beyond the complete output. Keep the calculation wide until
+        // after clamping, since valid on-disk dictionaries can exceed Int32.MaxValue.
+        var size = Math.Max(
+            4096,
+            outputSize >= 0 ? Math.Min(declaredSize, outputSize) : declaredSize
+        );
+        if (declaredSize < 0)
         {
             throw new InvalidParamException();
         }
-        var size = (2 | (property & 1)) << ((property >> 1) + 11);
+        if (size > int.MaxValue)
+        {
+            // A valid dictionary whose effective window exceeds this decoder's Int32 window.
+            throw new NotSupportedException(
+                $"LZMA window of {size} bytes exceeds this decoder's maximum of {int.MaxValue} bytes."
+            );
+        }
+        return (int)size;
+    }
+
+    internal static int GetLzma2DictionarySize(byte property, long outputSize = -1)
+    {
+        if (property > 40)
+        {
+            throw new InvalidParamException();
+        }
+        var declaredSize =
+            property == 40 ? uint.MaxValue : (2L | (property & 1)) << ((property >> 1) + 11);
+        var size = GetEffectiveDictionarySize(declaredSize, outputSize);
         DictionarySizeLimits.Validate(size, DictionarySizeLimits.Lzma2, "LZMA2");
         return size;
     }

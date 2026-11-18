@@ -233,7 +233,19 @@ public sealed partial class XZBlock : XZReadOnlyStream
         // Keep the filters reachable so their owned buffers are released at block end/disposal.
         foreach (var filter in _filters)
         {
-            filter.SetBaseStream(_decomStream);
+            if (filter is Lzma2Filter lzma2)
+            {
+                // XZ's other supported filters preserve size; the optional block header
+                // size is therefore also the LZMA2 coder's output size.
+                lzma2.SetBaseStream(
+                    _decomStream,
+                    UncompressedSize.HasValue ? checked((long)UncompressedSize.Value) : -1
+                );
+            }
+            else
+            {
+                filter.SetBaseStream(_decomStream);
+            }
             _decomStream = filter;
         }
         _streamConnected = true;

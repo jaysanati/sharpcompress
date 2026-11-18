@@ -57,7 +57,7 @@ public class Lzma2ParallelDictionaryLimitTests : TestBase
         var path = Path.Combine(SCRATCH_FILES_PATH, "parallel-dictionary-workers.bin");
         using var input = File.Create(path);
         using var output = File.Create(path + ".out");
-        var blocks = new[] { new Lzma2Block(0, 1, 0, 1), new Lzma2Block(1, 1, 1, 1) };
+        var blocks = new[] { new Lzma2Block(0, 1, 0, 8192), new Lzma2Block(1, 1, 8192, 8192) };
         Assert.Throws<DictionarySizeLimitExceededException>(() =>
             Lzma2ParallelDecoder.DecodeBlocksParallel(
                 input.SafeFileHandle,

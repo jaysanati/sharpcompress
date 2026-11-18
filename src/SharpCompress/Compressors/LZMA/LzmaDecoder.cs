@@ -237,7 +237,8 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
 
     private readonly LiteralDecoder _literalDecoder = new();
 
-    private int _dictionarySize;
+    private long _dictionarySize;
+    private int _effectiveDictionarySize;
 
     private uint _posStateMask;
     private int literalPosBits;
@@ -267,13 +268,14 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
 #if !LEGACY_DOTNET
     [MemberNotNull(nameof(_outWindow))]
 #endif
-    private void CreateDictionary()
+    private void CreateDictionary(long outputSize = -1)
     {
         if (_dictionarySize < 0)
         {
             throw new InvalidParamException();
         }
-        var blockSize = Math.Max(_dictionarySize, (1 << 12));
+        var blockSize = LzmaStream.GetEffectiveDictionarySize(_dictionarySize, outputSize);
+        _effectiveDictionarySize = blockSize;
         if (_enforceDictionarySizeLimit)
         {
             DictionarySizeLimits.Validate(blockSize, DictionarySizeLimits.Lzma, "LZMA");
@@ -386,7 +388,7 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
     {
         if (_outWindow is null)
         {
-            CreateDictionary();
+            CreateDictionary(outSize);
         }
         _outWindow.Init(outStream);
         if (outSize > 0)
@@ -402,7 +404,7 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
         try
         {
             rangeDecoder.Init(inStream);
-            Code(_dictionarySize, _outWindow, rangeDecoder);
+            Code(_effectiveDictionarySize, _outWindow, rangeDecoder);
             _outWindow.ReleaseStream();
         }
         finally
@@ -595,7 +597,7 @@ public partial class Decoder : ICoder, ISetDecoderProperties, IDisposable
             _dictionarySize = 0;
             for (var i = 0; i < 4; i++)
             {
-                _dictionarySize += properties[1 + i] << (i * 8);
+                _dictionarySize += (long)properties[1 + i] << (i * 8);
             }
         }
     }

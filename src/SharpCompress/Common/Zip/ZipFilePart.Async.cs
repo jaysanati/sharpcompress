@@ -152,9 +152,8 @@ internal abstract partial class ZipFilePart
                 }
                 // When the uncompressed size is known to be zero, skip remaining compressed
                 // bytes (required for streaming reads) and return an empty stream.
-                // Bit1 (EOS marker flag) means the output size is not stored in the header
-                // (the LZMA stream itself contains an end-of-stream marker instead), so we
-                // only short-circuit when the size is explicitly known to be zero.
+                // With Bit1 (EOS marker flag), zero can be an unknown-size placeholder,
+                // so only short-circuit when the size is explicitly known to be zero.
                 if (
                     !FlagUtility.HasFlag(Header.Flags, HeaderFlags.Bit1)
                     && Header.UncompressedSize == 0
@@ -173,9 +172,8 @@ internal abstract partial class ZipFilePart
 
                 // When the uncompressed size is known to be zero, skip remaining compressed
                 // bytes (required for streaming reads) and return an empty stream.
-                // Bit1 (EOS marker flag) means the output size is not stored in the header
-                // (the LZMA stream itself contains an end-of-stream marker instead), so we
-                // only short-circuit when the size is explicitly known to be zero.
+                // With Bit1 (EOS marker flag), zero can be an unknown-size placeholder,
+                // so only short-circuit when the size is explicitly known to be zero.
                 if (
                     !FlagUtility.HasFlag(Header.Flags, HeaderFlags.Bit1)
                     && Header.UncompressedSize == 0
@@ -190,9 +188,13 @@ internal abstract partial class ZipFilePart
                     Properties = props,
                     InputSize =
                         Header.CompressedSize > 0 ? Header.CompressedSize - 4 - props.Length : -1,
-                    OutputSize = FlagUtility.HasFlag(Header.Flags, HeaderFlags.Bit1)
-                        ? -1
-                        : Header.UncompressedSize,
+                    // An EOS marker does not invalidate an available entry size. A zero
+                    // placeholder with EOS still means unknown in streaming local headers.
+                    OutputSize =
+                        FlagUtility.HasFlag(Header.Flags, HeaderFlags.Bit1)
+                        && Header.UncompressedSize == 0
+                            ? -1
+                            : Header.UncompressedSize,
                 };
 
                 return await providers

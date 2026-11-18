@@ -274,7 +274,10 @@ internal static class Lzma2ParallelDecoder
 
         // Reject folder-wide properties here, not inside workers where Parallel
         // would wrap the format exception in AggregateException.
-        LzmaStream.GetLzma2DictionarySize(lzma2Props[0]);
+        foreach (var block in blocks)
+        {
+            LzmaStream.GetLzma2DictionarySize(lzma2Props[0], block.UnpackLen);
+        }
         Parallel.ForEach(
             blocks,
             new ParallelOptions

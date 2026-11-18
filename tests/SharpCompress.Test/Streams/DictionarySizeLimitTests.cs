@@ -108,7 +108,7 @@ public class DictionarySizeLimitTests : TestBase
                     Stream.Null,
                     Stream.Null,
                     0,
-                    1,
+                    256L << 20,
                     null!,
                     CancellationToken.None
                 )
@@ -117,7 +117,7 @@ public class DictionarySizeLimitTests : TestBase
         else
         {
             Assert.Throws<DictionarySizeLimitExceededException>(() =>
-                decoder.Code(Stream.Null, Stream.Null, 0, 1, null!)
+                decoder.Code(Stream.Null, Stream.Null, 0, 256L << 20, null!)
             );
         }
     }
@@ -372,6 +372,11 @@ public class DictionarySizeLimitTests : TestBase
     {
         var bytes = new byte[26];
         new byte[] { (byte)'L', (byte)'Z', (byte)'I', (byte)'P', 1, 28 }.CopyTo(bytes, 0);
+        // Keep the effective window above the limit even when the seekable trailer supplies a size.
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+            bytes.AsSpan(10),
+            256UL << 20
+        );
         using var input = new MemoryStream(bytes);
         if (useAsync)
         {

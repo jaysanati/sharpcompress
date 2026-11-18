@@ -151,7 +151,7 @@ public partial class Decoder : IAsyncDisposable
     {
         if (_outWindow is null)
         {
-            CreateDictionary();
+            CreateDictionary(outSize);
         }
         await _outWindow.InitAsync(outStream).ConfigureAwait(false);
         if (outSize > 0)
@@ -167,7 +167,7 @@ public partial class Decoder : IAsyncDisposable
         try
         {
             await rangeDecoder.InitAsync(inStream, cancellationToken).ConfigureAwait(false);
-            await CodeAsync(_dictionarySize, _outWindow, rangeDecoder, cancellationToken)
+            await CodeAsync(_effectiveDictionarySize, _outWindow, rangeDecoder, cancellationToken)
                 .ConfigureAwait(false);
             await _outWindow.ReleaseStreamAsync(cancellationToken).ConfigureAwait(false);
         }
