@@ -54,6 +54,9 @@ public partial class LzmaStream
                 }
 
                 await lzma._rangeDecoder.InitAsync(inputStream).ConfigureAwait(false);
+#if !LEGACY_DOTNET
+                lzma._rangeDecoder.EnableAsyncFastInput(lzma._rangeDecoderLimit);
+#endif
             }
             else
             {
@@ -195,6 +198,10 @@ public partial class LzmaStream
     private ValueTask<bool> DecodeBlockAsync(CancellationToken cancellationToken)
     {
 #if !LEGACY_DOTNET
+        if (!_isLzma2 && _rangeDecoder.AsyncFastInput)
+        {
+            return DecodeBufferedLzma1Async(cancellationToken);
+        }
         if (_isLzma2)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -210,6 +217,28 @@ public partial class LzmaStream
 #endif
         return _decoder!.CodeAsync(_dictionarySize, _outWindow, _rangeDecoder, cancellationToken);
     }
+
+#if !LEGACY_DOTNET
+    private async ValueTask<bool> DecodeBufferedLzma1Async(CancellationToken cancellationToken)
+    {
+        do
+        {
+            await _rangeDecoder.PrepareAsyncInput(cancellationToken).ConfigureAwait(false);
+            if (
+                _decoder!.CodeFast(
+                    _dictionarySize,
+                    _outWindow,
+                    _rangeDecoder,
+                    _rangeDecoder.AsyncInputLimit
+                )
+            )
+            {
+                return true;
+            }
+        } while (_outWindow.HasSpace);
+        return false;
+    }
+#endif
 
     public override async Task<int> ReadAsync(
         byte[] buffer,
@@ -266,7 +295,7 @@ public partial class LzmaStream
                     toProcess = (int)_availableBytes;
                 }
 #if !LEGACY_DOTNET
-                if (_isLzma2 && !_uncompressedChunk)
+                if (!_uncompressedChunk && (_isLzma2 || _rangeDecoder.AsyncFastInput))
                 {
                     // Bound CPU-only work between cancellation checks, even for huge caller buffers.
                     toProcess = Math.Min(toProcess, 16 * 1024);
@@ -417,7 +446,7 @@ public partial class LzmaStream
                     toProcess = (int)_availableBytes;
                 }
 #if !LEGACY_DOTNET
-                if (_isLzma2 && !_uncompressedChunk)
+                if (!_uncompressedChunk && (_isLzma2 || _rangeDecoder.AsyncFastInput))
                 {
                     toProcess = Math.Min(toProcess, 16 * 1024);
                 }

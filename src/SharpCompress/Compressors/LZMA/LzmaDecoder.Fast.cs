@@ -20,8 +20,8 @@ namespace SharpCompress.Compressors.LZMA;
 // call per byte.
 //
 // These tables are separate from (and not kept in sync with) the BitDecoder-based tables used
-// by scalar/per-symbol async decoding (LzmaDecoder.Async.cs). Modern LZMA2 async streams also
-// use this fast bank after asynchronously buffering a bounded compressed chunk.
+// by scalar/per-symbol async decoding (LzmaDecoder.Async.cs). Modern async streams also
+// use this fast bank when compressed input can be safely buffered.
 // Both sets are kept up to date by SetDecoderProperties/Init, so either decode path can be used
 // on a given Decoder instance, as long as sync and async decoding are not interleaved on the
 // same instance.
@@ -228,7 +228,8 @@ public partial class Decoder
     internal unsafe bool CodeFast(
         int dictionarySize,
         OutWindow outWindow,
-        RangeCoder.Decoder rangeDecoder
+        RangeCoder.Decoder rangeDecoder,
+        int inputLimit = int.MaxValue
     )
     {
         if (HasEndMarker)
@@ -250,18 +251,19 @@ public partial class Decoder
             }
             // Grow only after filling the current allocation, and never while it is pinned.
             outWindow.EnsureFastCapacity();
-            if (CodeFastCore(dictionarySize, outWindow, rangeDecoder))
+            if (CodeFastCore(dictionarySize, outWindow, rangeDecoder, inputLimit))
             {
                 return true;
             }
-        } while (outWindow.HasSpace);
+        } while (outWindow.HasSpace && rangeDecoder.FastBufferPos < inputLimit);
         return false;
     }
 
     private unsafe bool CodeFastCore(
         int dictionarySize,
         OutWindow outWindow,
-        RangeCoder.Decoder rangeDecoder
+        RangeCoder.Decoder rangeDecoder,
+        int inputLimit
     )
     {
         var dictionarySizeCheck = Math.Max(dictionarySize, 1);
@@ -309,7 +311,8 @@ public partial class Decoder
             };
 
             result = false;
-            while (os.Pos < os.WindowSize && os.Total < os.Limit)
+            // Async LZMA1 yields only between complete symbols, preserving models and reps.
+            while (os.Pos < os.WindowSize && os.Total < os.Limit && rs.InPos < inputLimit)
             {
                 var posState = (uint)os.Total & _posStateMask;
                 var stateIndex = (int)_state._index;

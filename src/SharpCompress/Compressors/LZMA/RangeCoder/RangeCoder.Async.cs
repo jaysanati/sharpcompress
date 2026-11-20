@@ -83,6 +83,64 @@ internal partial class Encoder
 internal partial class Decoder
 {
 #if !LEGACY_DOTNET
+    // A symbol uses at most 48 range bytes (match flags, length, slot and distance).
+    // Leave a conservative margin so refills always happen before any model is mutated.
+    private const int AsyncSymbolMargin = 64;
+    internal bool AsyncFastInput { get; private set; }
+    private bool asyncInputEnded;
+
+    internal void EnableAsyncFastInput(long limit)
+    {
+        // The 7z AES decoder exposes its exact plaintext limit, excluding block padding.
+        if (limit < 0 && _stream is AesDecoderStream aes)
+        {
+            limit = aes.Length;
+        }
+        SetFastLimit(limit);
+        AsyncFastInput = limit >= 0 || _stream is SharpCompress.IO.BufferedSubStream;
+    }
+
+    internal int AsyncInputLimit =>
+        asyncInputEnded ? int.MaxValue : Math.Max(0, _fastBufferLen - AsyncSymbolMargin);
+
+    internal async ValueTask PrepareAsyncInput(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (asyncInputEnded || _fastBufferPos < AsyncInputLimit)
+        {
+            return;
+        }
+        _fastBuffer ??= System.Buffers.ArrayPool<byte>.Shared.Rent(FastBufferSize);
+        var remaining = _fastBufferLen - _fastBufferPos;
+        Array.Copy(_fastBuffer, _fastBufferPos, _fastBuffer, 0, remaining);
+        _fastBufferPos = 0;
+        _fastBufferLen = remaining;
+        var target = FastBufferSize;
+        if (_fastLimit >= 0)
+        {
+            target = (int)Math.Min(target, Math.Max(remaining, _fastLimit - _total));
+        }
+        while (_fastBufferLen < target)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = await _stream
+                .ReadAsync(
+                    _fastBuffer.AsMemory(_fastBufferLen, target - _fastBufferLen),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (read == 0)
+            {
+                asyncInputEnded = true;
+                break;
+            }
+            _fastBufferLen += read;
+        }
+        asyncInputEnded |= _fastLimit >= 0 && _total + _fastBufferLen >= _fastLimit;
+        // The caller's sticky failure guard prevents decoding or retrying a partial fill.
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
     internal async ValueTask InitLzma2ChunkAsync(
         Stream stream,
         int compressedSize,

@@ -192,6 +192,11 @@ internal partial class Decoder
 
     private void FillFastBuffer()
     {
+        if (AsyncFastInput)
+        {
+            // Async LZMA1 must never fall through to synchronous source I/O, even at EOF.
+            throw new SharpCompress.Common.IncompleteArchiveException("Unexpected end of stream.");
+        }
         _fastBuffer ??= ArrayPool<byte>.Shared.Rent(FastBufferSize);
         if (_fastEndOfStream)
         {
